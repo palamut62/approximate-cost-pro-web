@@ -1,0 +1,6 @@
+PyPDF2==3.0.1
+pdfplumber==0.9.0
+pandas==2.1.3
+openpyxl==3.1.2
+PyMuPDF==1.23.14
+xlsxwriter==3.1.9
