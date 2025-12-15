@@ -21,10 +21,11 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QGroupBox, QHeaderView, QSplitter, QTabWidget,
                              QComboBox, QSpinBox, QDoubleSpinBox, QFrame, QCheckBox,
                              QListWidget, QListWidgetItem, QDialog, QFormLayout)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QRect
-from PyQt5.QtGui import QFont, QIcon
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QRect, QUrl
+from PyQt5.QtGui import QFont, QIcon, QDesktopServices
 from cost_estimator import CostEstimator
 from analysis_builder import AnalysisBuilder
+from custom_analysis_manager import CustomAnalysisManager
 
 class PDFSearchEngine:
     def __init__(self):
@@ -2745,7 +2746,7 @@ class PDFSearchAppPyQt5(QMainWindow):
 
     def setup_ui(self):
         """UI kurulumu"""
-        self.setWindowTitle("PDF Arama Uygulaması - PyQt5 - Poz No & Keyword Search")
+        self.setWindowTitle("Yaklaşık Maliyet Pro - Birim Fiyat ve Maliyet Tahmini")
         self.setGeometry(100, 100, 1400, 900)
         self.showMaximized()
 
@@ -2756,6 +2757,67 @@ class PDFSearchAppPyQt5(QMainWindow):
         # Ana layout
         main_layout = QVBoxLayout()
         central_widget.setLayout(main_layout)
+
+        # Aktif Proje Bilgisi Header
+        self.project_header = QGroupBox("Aktif Proje")
+        self.project_header.setStyleSheet("""
+            QGroupBox {
+                font-size: 12pt;
+                font-weight: bold;
+                border: 2px solid #1976D2;
+                border-radius: 5px;
+                margin-top: 10px;
+                padding-top: 10px;
+                background-color: #E3F2FD;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 10px;
+                padding: 0 5px;
+                color: #1976D2;
+            }
+        """)
+        header_layout = QHBoxLayout()
+
+        self.project_name_label = QLabel("Proje seçilmedi")
+        self.project_name_label.setStyleSheet("font-size: 14pt; font-weight: bold; color: #1565C0;")
+        header_layout.addWidget(self.project_name_label)
+
+        header_layout.addWidget(QLabel(" | "))
+
+        self.project_employer_label = QLabel("İşveren: -")
+        header_layout.addWidget(self.project_employer_label)
+
+        self.project_contractor_label = QLabel("Yüklenici: -")
+        header_layout.addWidget(self.project_contractor_label)
+
+        self.project_location_label = QLabel("Yer: -")
+        header_layout.addWidget(self.project_location_label)
+
+        header_layout.addStretch()
+
+        # Proje Yönetim Butonları (Header)
+        self.new_proj_btn = QPushButton("+ Yeni Proje")
+        self.new_proj_btn.setCursor(Qt.PointingHandCursor)
+        self.new_proj_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 5px 15px; border-radius: 4px;")
+        self.new_proj_btn.clicked.connect(lambda: self.cost_tab.create_new_project())
+        header_layout.addWidget(self.new_proj_btn)
+
+        self.manage_proj_btn = QPushButton("📁 Proje Yönetimi")
+        self.manage_proj_btn.setCursor(Qt.PointingHandCursor)
+        self.manage_proj_btn.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold; padding: 5px 15px; border-radius: 4px;")
+        self.manage_proj_btn.clicked.connect(lambda: self.cost_tab.open_project_manager())
+        header_layout.addWidget(self.manage_proj_btn)
+
+        self.close_proj_btn = QPushButton("🚪 Projeden Çıkış")
+        self.close_proj_btn.setCursor(Qt.PointingHandCursor)
+        self.close_proj_btn.setVisible(False) # Başlangıçta gizli (proje yok)
+        self.close_proj_btn.setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; padding: 5px 15px; border-radius: 4px;")
+        self.close_proj_btn.clicked.connect(lambda: self.cost_tab.close_current_project())
+        header_layout.addWidget(self.close_proj_btn)
+
+        self.project_header.setLayout(header_layout)
+        main_layout.addWidget(self.project_header)
 
         # Durum bölümü - Sadece bilgi göster
         status_group = QGroupBox("Durum")
@@ -2784,12 +2846,17 @@ class PDFSearchAppPyQt5(QMainWindow):
         self.tab_widget = QTabWidget()
         main_layout.addWidget(self.tab_widget)
 
-        # CSV Seçim sekmesi (YENİ)
+        # Hakkımda sekmesi (Her zaman aktif)
+        self.about_tab = QWidget()
+        self.tab_widget.addTab(self.about_tab, "ℹ️ Hakkımda")
+        self.setup_about_tab()
+
+        # CSV Seçim sekmesi
         self.csv_selection_tab = QWidget()
         self.tab_widget.addTab(self.csv_selection_tab, "✨ CSV Poz Seçim")
         self.setup_csv_selection_tab()
 
-        # Poz Viewer sekmesi (YENİ)
+        # Poz Viewer sekmesi
         self.poz_viewer_tab = PozViewerWidget()
         self.poz_viewer_tab.parent_app = self  # Parent app referansı
         self.tab_widget.addTab(self.poz_viewer_tab, "📋 Poz Viewer")
@@ -2800,13 +2867,167 @@ class PDFSearchAppPyQt5(QMainWindow):
         self.analysis_tab.parent_app = self  # Parent app referansı
         self.tab_widget.addTab(self.analysis_tab, "📊 Poz Analizi")
 
-        # Maliyet Hesabı (YENİ)
+        # Maliyet Hesabı
         self.cost_tab = CostEstimator()
         self.tab_widget.addTab(self.cost_tab, "💰 Maliyet Hesabı")
 
-        # Yeni Analiz & AI (YENİ)
+        # Yeni Analiz & AI
         self.builder_tab = AnalysisBuilder()
+        self.builder_tab.parent_app = self # REFERANS EKLENDİ
         self.tab_widget.addTab(self.builder_tab, "🤖 Yeni Analiz Yap")
+        
+        # Kayıtlı Pozlar ve Analizler (YENİ SEKME)
+        self.custom_analysis_tab = CustomAnalysisManager()
+        self.tab_widget.addTab(self.custom_analysis_tab, "🗂️ Kayıtlı Pozlar ve Analizler")
+
+        # Proje değişikliği sinyalini bağla
+        self.cost_tab.project_changed_signal.connect(self.on_project_changed)
+
+        # Başlangıçta aktif bir proje varsa (auto-load) header'ı güncelle
+        current_project = self.cost_tab.get_current_project()
+        if current_project:
+            self.on_project_changed(current_project)
+
+        # Başlangıçta tabları kontrol et
+        self.update_tabs_state()
+
+    def setup_about_tab(self):
+        """Hakkımda sekmesini oluştur"""
+        layout = QVBoxLayout(self.about_tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Arka plan için container
+        container = QWidget()
+        container.setStyleSheet("background-color: white;")
+        container_layout = QVBoxLayout(container)
+        container_layout.setAlignment(Qt.AlignCenter)
+
+        # Logo veya Başlık
+        title = QLabel("Yaklaşık Maliyet Pro")
+        title.setStyleSheet("""
+            QLabel {
+                font-size: 28pt; 
+                font-weight: bold; 
+                color: #1565C0; 
+                margin-bottom: 5px;
+            }
+        """)
+        title.setAlignment(Qt.AlignCenter)
+        container_layout.addWidget(title)
+
+        # Versiyon
+        version = QLabel("v1.0.0")
+        version.setStyleSheet("""
+            QLabel {
+                font-size: 11pt; 
+                color: white; 
+                background-color: #607D8B; 
+                border-radius: 10px; 
+                padding: 4px 12px;
+            }
+        """)
+        version.setAlignment(Qt.AlignCenter)
+        version_container = QWidget()
+        version_layout = QHBoxLayout(version_container)
+        version_layout.addStretch()
+        version_layout.addWidget(version)
+        version_layout.addStretch()
+        container_layout.addWidget(version_container)
+
+        container_layout.addSpacing(30)
+
+        # Bilgi Kartı
+        info_card = QFrame()
+        info_card.setStyleSheet("""
+            QFrame {
+                background-color: #F5F7FA;
+                border: 1px solid #E0E0E0;
+                border-radius: 15px;
+                padding: 20px;
+            }
+        """)
+        card_layout = QVBoxLayout(info_card)
+
+        desc = QLabel()
+        desc.setWordWrap(True)
+        desc.setAlignment(Qt.AlignCenter)
+        desc.setTextFormat(Qt.RichText)
+        desc.setOpenExternalLinks(True)
+        desc.setStyleSheet("font-size: 11pt; color: #37474F; line-height: 1.5;")
+        
+        html_content = """
+        <p style='margin-bottom: 15px;'>
+            <b>Türkiye İnşaat Sektörü</b> için geliştirilmiş, PDF'lerden otomatik veri çıkarma ve 
+            birim fiyat analiz yeteneklerine sahip kapsamlı maliyet hesaplama aracı.
+        </p>
+
+        <hr style='border: 1px solid #CFD8DC; margin: 15px 0;'>
+
+        <p>
+            Developed by <b>Umut Çelik</b>
+        </p>
+
+        <p style='margin-top: 20px;'>
+            📧 <a href='mailto:umutcelik6230@gmail.com' style='text-decoration: none; color: #1976D2; font-weight: bold;'>umutcelik6230@gmail.com</a>
+        </p>
+        
+        <p>
+            🐦 <a href='https://x.com/palamut62' style='text-decoration: none; color: #1DA1F2; font-weight: bold;'>@palamut62</a>
+        </p>
+        """
+        desc.setText(html_content)
+        card_layout.addWidget(desc)
+
+        container_layout.addWidget(info_card)
+        container_layout.addStretch()
+        
+        # Footer
+        footer = QLabel("© 2025 Yaklaşık Maliyet Pro. Tüm hakları saklıdır.")
+        footer.setStyleSheet("color: #90A4AE; font-size: 9pt; margin-top: 20px;")
+        footer.setAlignment(Qt.AlignCenter)
+        container_layout.addWidget(footer)
+
+        layout.addWidget(container)
+
+    def on_project_changed(self, project_data):
+        """Proje değiştiğinde çağrılır"""
+        if project_data and project_data.get('name'):
+            self.project_name_label.setText(project_data.get('name', 'İsimsiz Proje'))
+            self.project_employer_label.setText(f"İşveren: {project_data.get('employer', '-') or '-'}")
+            self.project_contractor_label.setText(f"Yüklenici: {project_data.get('contractor', '-') or '-'}")
+            self.project_location_label.setText(f"Yer: {project_data.get('location', '-') or '-'}")
+
+            # Pencere başlığını güncelle
+            self.setWindowTitle(f"Yaklaşık Maliyet Pro - {project_data.get('name', '')}")
+        else:
+            self.project_name_label.setText("Proje seçilmedi")
+            self.project_employer_label.setText("İşveren: -")
+            self.project_contractor_label.setText("Yüklenici: -")
+            self.project_location_label.setText("Yer: -")
+            self.setWindowTitle("Yaklaşık Maliyet Pro - Birim Fiyat ve Maliyet Tahmini")
+
+        # Tab durumlarını güncelle
+        self.update_tabs_state()
+
+    def update_tabs_state(self):
+        """Proje durumuna göre tabları aktif/pasif yap"""
+        has_project = self.cost_tab.has_active_project()
+
+        # Hakkımda (index 0) her zaman aktif
+        # Diğer sekmeler proje varsa aktif
+        for i in range(self.tab_widget.count()):
+            if i == 0:  # Hakkımda sekmesi
+                self.tab_widget.setTabEnabled(i, True)
+            else:
+                self.tab_widget.setTabEnabled(i, has_project)
+
+        # Buton görünürlüğü
+        if hasattr(self, 'close_proj_btn'):
+            self.close_proj_btn.setVisible(has_project)
+        
+        if not has_project:
+             # Eğer proje yoksa Hakkımda sekmesine git
+            self.tab_widget.setCurrentIndex(0)
 
     def open_settings(self):
         """Ayarlar penceresini aç"""

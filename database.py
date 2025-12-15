@@ -19,11 +19,38 @@ class DatabaseManager:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 description TEXT,
+                employer TEXT,
+                contractor TEXT,
+                location TEXT,
+                project_code TEXT,
+                project_date TEXT,
                 created_date TEXT,
                 updated_date TEXT,
                 status TEXT DEFAULT 'Active'
             )
         ''')
+
+        # Mevcut tabloya yeni sütunlar ekle (migration)
+        try:
+            cursor.execute('ALTER TABLE projects ADD COLUMN employer TEXT')
+        except:
+            pass
+        try:
+            cursor.execute('ALTER TABLE projects ADD COLUMN contractor TEXT')
+        except:
+            pass
+        try:
+            cursor.execute('ALTER TABLE projects ADD COLUMN location TEXT')
+        except:
+            pass
+        try:
+            cursor.execute('ALTER TABLE projects ADD COLUMN project_code TEXT')
+        except:
+            pass
+        try:
+            cursor.execute('ALTER TABLE projects ADD COLUMN project_date TEXT')
+        except:
+            pass
 
         # Proje Kalemleri (Keşif Özeti)
         cursor.execute('''
@@ -85,16 +112,70 @@ class DatabaseManager:
         return sqlite3.connect(self.db_path)
 
     # --- Project Methods ---
-    def create_project(self, name, description=""):
+    def create_project(self, name, description="", employer="", contractor="", location="", project_code="", project_date=""):
         conn = self.get_connection()
         cursor = conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        cursor.execute('INSERT INTO projects (name, description, created_date, updated_date) VALUES (?, ?, ?, ?)',
-                       (name, description, now, now))
+        cursor.execute('''INSERT INTO projects
+                          (name, description, employer, contractor, location, project_code, project_date, created_date, updated_date)
+                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                       (name, description, employer, contractor, location, project_code, project_date, now, now))
         project_id = cursor.lastrowid
         conn.commit()
         conn.close()
         return project_id
+
+    def update_project(self, project_id, name=None, description=None, employer=None, contractor=None, location=None, project_code=None, project_date=None):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        # Mevcut veriyi al
+        cursor.execute('SELECT * FROM projects WHERE id = ?', (project_id,))
+        current = cursor.fetchone()
+        if not current:
+            conn.close()
+            return False
+
+        columns = [desc[0] for desc in cursor.description]
+        current_dict = dict(zip(columns, current))
+
+        # Sadece verilen değerleri güncelle
+        new_name = name if name is not None else current_dict.get('name', '')
+        new_desc = description if description is not None else current_dict.get('description', '')
+        new_employer = employer if employer is not None else current_dict.get('employer', '')
+        new_contractor = contractor if contractor is not None else current_dict.get('contractor', '')
+        new_location = location if location is not None else current_dict.get('location', '')
+        new_code = project_code if project_code is not None else current_dict.get('project_code', '')
+        new_date = project_date if project_date is not None else current_dict.get('project_date', '')
+
+        cursor.execute('''UPDATE projects SET
+                          name = ?, description = ?, employer = ?, contractor = ?,
+                          location = ?, project_code = ?, project_date = ?, updated_date = ?
+                          WHERE id = ?''',
+                       (new_name, new_desc, new_employer, new_contractor, new_location, new_code, new_date, now, project_id))
+        conn.commit()
+        conn.close()
+        return True
+
+    def get_project(self, project_id):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM projects WHERE id = ?', (project_id,))
+        columns = [description[0] for description in cursor.description]
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return dict(zip(columns, row))
+        return None
+
+    def clear_project_items(self, project_id):
+        """Projedeki tüm kalemleri sil (maliyeti sıfırla)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM project_items WHERE project_id = ?', (project_id,))
+        conn.commit()
+        conn.close()
 
     def get_projects(self):
         conn = self.get_connection()
@@ -206,6 +287,23 @@ class DatabaseManager:
         results = [dict(zip(columns, row)) for row in cursor.fetchall()]
         conn.close()
         return results
+
+    def get_analysis_components(self, analysis_id):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM analysis_components WHERE analysis_id = ?', (analysis_id,))
+        columns = [description[0] for description in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def delete_analysis(self, analysis_id):
+        """Analizi ve (CASCADE sayesinde) bileşenlerini sil"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM custom_analyses WHERE id = ?', (analysis_id,))
+        conn.commit()
+        conn.close()
 
     # --- Settings Methods ---
     def get_setting(self, key):

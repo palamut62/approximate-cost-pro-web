@@ -9,7 +9,7 @@ import requests
 import re
 
 class AIAnalysisThread(QThread):
-    finished = pyqtSignal(list, str) # components, error
+    finished = pyqtSignal(list, str, str) # components, explanation, error
     
     def __init__(self, description, unit, api_key, model, base_url, context_data=""):
         super().__init__()
@@ -45,17 +45,21 @@ class AIAnalysisThread(QThread):
                - Malzeme (Örn: Çimento, Kum, Tuğla, vb.)
                - İşçilik (Örn: Usta, Düz işçi)
                - Makine (varsa)
-            2. Miktarlar gerçekçi inşaat normlarına (analiz kitaplarına) dayanmalıdır.
-            3. Birim fiyatlar 2024-2025 yılı ortalama piyasa rayiçleri (TL) olmalıdır.
-            4. Çıktı SADECE geçerli bir JSON formatında olmalı, markdown veya ek açıklama olmamalıdır.
+            4. Miktarlar gerçekçi inşaat normlarına (analiz kitaplarına) dayanmalıdır.
+            5. Birim fiyatlar 2024-2025 yılı ortalama piyasa rayiçleri (TL) olmalıdır.
+            6. Çıktı SADECE geçerli bir JSON formatında olmalı.
+            7. Lütfen JSON içindeki metin alanlarında çift tırnak (") kullanmaktan kaçının veya escape edin (\").
             
             JSON Formatı Şablonu:
-            [
-              {{ "type": "Malzeme", "code": "10.xxx", "name": "Malzeme Adı", "unit": "kg/m/adet", "quantity": 0.0, "unit_price": 0.0 }},
-              {{ "type": "İşçilik", "code": "01.xxx", "name": "İşçilik Adı", "unit": "sa", "quantity": 0.0, "unit_price": 0.0 }}
-            ]
+            {{
+              "explanation": "Bu analizi oluştururken ... mantığını kullandım. Şu pozları referans aldım: ...",
+              "components": [
+                  {{ "type": "Malzeme", "code": "10.xxx", "name": "Malzeme Adı", "unit": "kg/m/adet", "quantity": 0.0, "unit_price": 0.0 }},
+                  {{ "type": "İşçilik", "code": "01.xxx", "name": "İşçilik Adı", "unit": "sa", "quantity": 0.0, "unit_price": 0.0 }}
+              ]
+            }}
             
-            Lütfen sadece saf JSON array döndür.
+            Lütfen "explanation" kısmında neden bu malzemeleri ve miktarları seçtiğini, hangi yöntemle hesapladığını detaylıca anlat.
             """
 
             headers = {
@@ -72,7 +76,7 @@ class AIAnalysisThread(QThread):
                     {"role": "user", "content": prompt}
                 ],
                 "temperature": 0.2, # Low temperature for more deterministic/factual output
-                "max_tokens": 1000
+                "max_tokens": 2000
             }
             
             response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=30)
@@ -86,26 +90,46 @@ class AIAnalysisThread(QThread):
             # Clean Markdown if exists
             content = self.clean_json_string(content)
             
-            components = json.loads(content)
+            data = json.loads(content)
+            
+            # Handle both old (list) and new (dict) formats for robustness
+            if isinstance(data, list):
+                components = data
+                explanation = "Açıklama mevcut değil."
+            else:
+                components = data.get('components', [])
+                explanation = data.get('explanation', "Açıklama yapılmadı.")
             
             # Calculate totals for verify
             for comp in components:
                 comp['total_price'] = float(comp['quantity']) * float(comp['unit_price'])
                 
-            self.finished.emit(components, "")
+            self.finished.emit(components, explanation, "")
             
         except Exception as e:
-            self.finished.emit([], str(e))
+            self.finished.emit([], "", str(e))
 
     def clean_json_string(self, s):
-        """Remove markdown code blocks from string"""
+        """Remove markdown code blocks from string and try to extract JSON"""
         s = s.strip()
+        
+        # Markdown clean
         if s.startswith("```json"):
             s = s[7:]
         if s.startswith("```"):
             s = s[3:]
         if s.endswith("```"):
             s = s[:-3]
+            
+        # Regex extraction as fallback if full string isn't valid JSON
+        try:
+            # En dıştaki { } bloğunu bulmayı dene
+            match = re.search(r'\{.*\}', s.strip(), re.DOTALL)
+            if match:
+                return match.group(0)
+        except:
+            pass
+            
         return s.strip()
 
 class AnalysisBuilder(QWidget):
@@ -292,7 +316,7 @@ class AnalysisBuilder(QWidget):
         self.generate_btn.setEnabled(not loading)
         self.progress_bar.setVisible(loading)
         
-    def on_ai_finished(self, components, error):
+    def on_ai_finished(self, components, explanation, error):
         self.set_loading(False)
         if error:
             QMessageBox.critical(self, "Hata", f"AI Hatası: {error}")
@@ -313,7 +337,13 @@ class AnalysisBuilder(QWidget):
             
         self.comp_table.blockSignals(False)
         self.recalc_totals()
-        QMessageBox.information(self, "Başarılı", "Yapay zeka taslak analizi oluşturdu. Lütfen fiyatları ve miktarları kontrol ediniz.")
+        
+        # Show Rationale Report
+        QMessageBox.information(
+            self, 
+            "Yapay Zeka Analiz Raporu", 
+            f"✅ Analiz Oluşturuldu!\n\n🔍 **AI Açıklaması:**\n{explanation}\n\nLütfen tabloyu kontrol edip kaydedin."
+        )
 
     def add_empty_row(self):
         row = self.comp_table.rowCount()
