@@ -14,8 +14,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QListWidgetItem, QTableWidget, QTableWidgetItem,
                              QSplitter, QGroupBox, QMessageBox, QHeaderView,
                              QProgressBar, QLineEdit)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
+from PyQt5.QtGui import QFont, QColor, QIcon
 
 
 class PozAnalyzer(QThread):
@@ -328,6 +328,15 @@ class PozAnalizViewer(QMainWindow):
         super().__init__()
         self.poz_analyses = {}
         self.analiz_folder = Path(__file__).parent / "ANALIZ"
+
+        # Pencere ikonu ayarla (farklı boyutlarda)
+        icon_path = Path(__file__).parent / "yaklasik_maliyet.png"
+        if icon_path.exists():
+            icon = QIcon()
+            for size in [16, 24, 32, 48, 64, 128, 256]:
+                icon.addFile(str(icon_path), QSize(size, size))
+            self.setWindowIcon(icon)
+
         self.setup_ui()
         self.load_analyses()
 
@@ -607,6 +616,16 @@ class PozAnalizViewer(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    app.setStyle('Fusion')
+
+    # Uygulama ikonu ayarla
+    icon_path = Path(__file__).parent / "yaklasik_maliyet.png"
+    if icon_path.exists():
+        icon = QIcon()
+        for size in [16, 24, 32, 48, 64, 128, 256]:
+            icon.addFile(str(icon_path), QSize(size, size))
+        app.setWindowIcon(icon)
+
     window = PozAnalizViewer()
     window.show()
     sys.exit(app.exec_())

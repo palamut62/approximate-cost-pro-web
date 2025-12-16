@@ -11,7 +11,8 @@ from PyQt5.QtWidgets import (
     QTableWidget, QTableWidgetItem, QPushButton, QLabel, QSplitter,
     QTextEdit, QLineEdit, QMessageBox, QGroupBox, QHeaderView
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QSize
+from PyQt5.QtGui import QIcon
 
 
 class CSVPozSearchApp(QMainWindow):
@@ -22,6 +23,14 @@ class CSVPozSearchApp(QMainWindow):
         self.setWindowTitle("Poz Seçim Uygulaması - CSV")
         self.setGeometry(100, 100, 1600, 900)
         self.showMaximized()
+
+        # Pencere ikonu ayarla (farklı boyutlarda)
+        icon_path = Path(__file__).parent / "yaklasik_maliyet.png"
+        if icon_path.exists():
+            icon = QIcon()
+            for size in [16, 24, 32, 48, 64, 128, 256]:
+                icon.addFile(str(icon_path), QSize(size, size))
+            self.setWindowIcon(icon)
 
         self.csv_data = []
         self.selected_pozlar = []
@@ -268,6 +277,14 @@ class CSVPozSearchApp(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
+
+    # Uygulama ikonu ayarla
+    icon_path = Path(__file__).parent / "yaklasik_maliyet.png"
+    if icon_path.exists():
+        icon = QIcon()
+        for size in [16, 24, 32, 48, 64, 128, 256]:
+            icon.addFile(str(icon_path), QSize(size, size))
+        app.setWindowIcon(icon)
 
     window = CSVPozSearchApp()
     window.show()

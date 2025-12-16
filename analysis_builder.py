@@ -206,6 +206,11 @@ class AnalysisBuilder(QWidget):
         del_row_btn = QPushButton("- Satır Sil")
         del_row_btn.clicked.connect(self.remove_row)
         btn_layout.addWidget(del_row_btn)
+
+        clear_all_btn = QPushButton("🗑️ Tümünü Temizle")
+        clear_all_btn.setStyleSheet("background-color: #FF5252; color: white;")
+        clear_all_btn.clicked.connect(self.clear_all_rows)
+        btn_layout.addWidget(clear_all_btn)
         layout.addLayout(btn_layout)
         
         # --- Results ---
@@ -355,6 +360,21 @@ class AnalysisBuilder(QWidget):
     def remove_row(self):
         self.comp_table.removeRow(self.comp_table.currentRow())
         self.recalc_totals()
+
+    def clear_all_rows(self):
+        """Tablodaki tüm satırları temizle"""
+        if self.comp_table.rowCount() > 0:
+            reply = QMessageBox.question(
+                self, 
+                "Onay", 
+                "Tüm satırları silmek istediğinize emin misiniz?",
+                QMessageBox.Yes | QMessageBox.No, 
+                QMessageBox.No
+            )
+            
+            if reply == QMessageBox.Yes:
+                self.comp_table.setRowCount(0)
+                self.recalc_totals()
 
     def on_item_changed(self, item):
         self.recalc_totals()

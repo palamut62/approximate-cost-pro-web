@@ -105,6 +105,21 @@ class DatabaseManager:
             )
         ''')
 
+        # PDF/Analiz Veri Kaynakları
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS pdf_sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT UNIQUE,
+                file_name TEXT,
+                source_type TEXT,  -- 'PDF' veya 'ANALIZ'
+                file_hash TEXT,
+                file_size INTEGER,
+                added_date TEXT,
+                last_checked TEXT,
+                is_changed BOOLEAN DEFAULT 0
+            )
+        ''')
+
         conn.commit()
         conn.close()
 
@@ -305,6 +320,77 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
+    def add_analysis_component(self, analysis_id, comp_type, code, name, unit, quantity, unit_price):
+        """Analize yeni bileşen ekle"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        total_price = quantity * unit_price
+        cursor.execute('''
+            INSERT INTO analysis_components (analysis_id, type, code, name, unit, quantity, unit_price, total_price)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (analysis_id, comp_type, code, name, unit, quantity, unit_price, total_price))
+        component_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return component_id
+
+    def update_analysis_component(self, component_id, comp_type=None, code=None, name=None, unit=None, quantity=None, unit_price=None):
+        """Analiz bileşenini güncelle"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # Mevcut veriyi al
+        cursor.execute('SELECT * FROM analysis_components WHERE id = ?', (component_id,))
+        columns = [desc[0] for desc in cursor.description]
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return False
+
+        current = dict(zip(columns, row))
+
+        new_type = comp_type if comp_type is not None else current['type']
+        new_code = code if code is not None else current['code']
+        new_name = name if name is not None else current['name']
+        new_unit = unit if unit is not None else current['unit']
+        new_quantity = quantity if quantity is not None else current['quantity']
+        new_unit_price = unit_price if unit_price is not None else current['unit_price']
+        new_total = new_quantity * new_unit_price
+
+        cursor.execute('''UPDATE analysis_components SET
+                          type = ?, code = ?, name = ?, unit = ?, quantity = ?, unit_price = ?, total_price = ?
+                          WHERE id = ?''',
+                       (new_type, new_code, new_name, new_unit, new_quantity, new_unit_price, new_total, component_id))
+        conn.commit()
+        conn.close()
+        return True
+
+    def delete_analysis_component(self, component_id):
+        """Analiz bileşenini sil"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM analysis_components WHERE id = ?', (component_id,))
+        conn.commit()
+        conn.close()
+
+    def update_analysis_total(self, analysis_id):
+        """Analiz toplam tutarını bileşenlerden hesapla ve güncelle"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # Bileşenlerin toplamını hesapla
+        cursor.execute('SELECT SUM(total_price) FROM analysis_components WHERE analysis_id = ?', (analysis_id,))
+        result = cursor.fetchone()
+        total = result[0] if result[0] else 0
+
+        # %25 kâr ekle
+        total_with_overhead = total * 1.25
+
+        cursor.execute('UPDATE custom_analyses SET total_price = ? WHERE id = ?', (total_with_overhead, analysis_id))
+        conn.commit()
+        conn.close()
+        return total_with_overhead
+
     # --- Settings Methods ---
     def get_setting(self, key):
         conn = self.get_connection()
@@ -320,3 +406,144 @@ class DatabaseManager:
         cursor.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
         conn.commit()
         conn.close()
+
+    # --- PDF Source Methods ---
+    def add_pdf_source(self, file_path, source_type):
+        """Yeni PDF/Analiz kaynağı ekle"""
+        import hashlib
+        from pathlib import Path
+
+        file_path = str(file_path)
+        path_obj = Path(file_path)
+
+        if not path_obj.exists():
+            return None
+
+        # Dosya hash'i hesapla
+        file_hash = self._calculate_file_hash(file_path)
+        file_size = path_obj.stat().st_size
+        file_name = path_obj.name
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute('''
+                INSERT INTO pdf_sources (file_path, file_name, source_type, file_hash, file_size, added_date, last_checked)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (file_path, file_name, source_type, file_hash, file_size, now, now))
+            source_id = cursor.lastrowid
+            conn.commit()
+            return source_id
+        except Exception as e:
+            print(f"PDF source ekleme hatası: {e}")
+            conn.rollback()
+            return None
+        finally:
+            conn.close()
+
+    def _calculate_file_hash(self, file_path):
+        """Dosyanın MD5 hash'ini hesapla"""
+        import hashlib
+        hash_md5 = hashlib.md5()
+        try:
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_md5.update(chunk)
+            return hash_md5.hexdigest()
+        except Exception:
+            return None
+
+    def get_pdf_sources(self, source_type=None):
+        """Tüm PDF kaynaklarını getir, opsiyonel olarak türe göre filtrele"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        if source_type:
+            cursor.execute('SELECT * FROM pdf_sources WHERE source_type = ? ORDER BY added_date DESC', (source_type,))
+        else:
+            cursor.execute('SELECT * FROM pdf_sources ORDER BY source_type, added_date DESC')
+
+        columns = [description[0] for description in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def delete_pdf_source(self, source_id):
+        """PDF kaynağını sil"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM pdf_sources WHERE id = ?', (source_id,))
+        conn.commit()
+        conn.close()
+
+    def check_pdf_sources_for_changes(self):
+        """Tüm PDF kaynaklarını kontrol et ve değişenleri işaretle"""
+        from pathlib import Path
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM pdf_sources')
+        columns = [description[0] for description in cursor.description]
+        sources = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+
+        changed_files = []
+        missing_files = []
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        for source in sources:
+            file_path = source['file_path']
+            path_obj = Path(file_path)
+
+            if not path_obj.exists():
+                missing_files.append(source)
+                continue
+
+            current_hash = self._calculate_file_hash(file_path)
+            if current_hash != source['file_hash']:
+                changed_files.append(source)
+                # Değişikliği işaretle
+                conn = self.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE pdf_sources SET is_changed = 1, last_checked = ? WHERE id = ?
+                ''', (now, source['id']))
+                conn.commit()
+                conn.close()
+            else:
+                # Değişiklik yok, sadece kontrol tarihini güncelle
+                conn = self.get_connection()
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE pdf_sources SET is_changed = 0, last_checked = ? WHERE id = ?
+                ''', (now, source['id']))
+                conn.commit()
+                conn.close()
+
+        return {'changed': changed_files, 'missing': missing_files}
+
+    def update_pdf_source_hash(self, source_id):
+        """PDF kaynağının hash'ini güncelle (dosya güncellendikten sonra)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT file_path FROM pdf_sources WHERE id = ?', (source_id,))
+        result = cursor.fetchone()
+        conn.close()
+
+        if not result:
+            return False
+
+        file_path = result[0]
+        new_hash = self._calculate_file_hash(file_path)
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE pdf_sources SET file_hash = ?, is_changed = 0, last_checked = ? WHERE id = ?
+        ''', (new_hash, now, source_id))
+        conn.commit()
+        conn.close()
+        return True

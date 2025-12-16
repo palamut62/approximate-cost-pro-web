@@ -21,8 +21,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QGroupBox, QHeaderView, QSplitter, QTabWidget,
                              QComboBox, QSpinBox, QDoubleSpinBox, QFrame, QCheckBox,
                              QListWidget, QListWidgetItem, QDialog, QFormLayout)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QRect, QUrl
-from PyQt5.QtGui import QFont, QIcon, QDesktopServices
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QRect, QUrl, QSize
+from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QPixmap, QColor
 from cost_estimator import CostEstimator
 from analysis_builder import AnalysisBuilder
 from custom_analysis_manager import CustomAnalysisManager
@@ -2582,13 +2582,31 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Ayarlar")
-        self.setFixedWidth(400)
+        self.setMinimumSize(750, 550)
         from database import DatabaseManager
+        import shutil
         self.db = DatabaseManager()
+
+        # Proje klasörleri
+        self.base_dir = Path(__file__).resolve().parent
+        self.pdf_folder = self.base_dir / "PDF"
+        self.analiz_folder = self.base_dir / "ANALIZ"
+
+        # Klasörlerin var olduğundan emin ol
+        self.pdf_folder.mkdir(exist_ok=True)
+        self.analiz_folder.mkdir(exist_ok=True)
+
         self.setup_ui()
 
     def setup_ui(self):
         layout = QVBoxLayout()
+
+        # Tab Widget
+        self.tabs = QTabWidget()
+
+        # --- Tab 1: API Ayarları ---
+        api_tab = QWidget()
+        api_layout = QVBoxLayout(api_tab)
         form = QFormLayout()
 
         # API Key
@@ -2607,14 +2625,7 @@ class SettingsDialog(QDialog):
             "amazon/nova-2-lite-v1:free",
             "arcee-ai/trinity-mini:free",
             "tngtech/tng-r1t-chimera:free",
-            "allenai/olmo-3-32b-think:free",
-            "kwaipilot/kat-coder-pro:free",
-            "nvidia/nemotron-nano-12b-v2-vl:free",
-            "alibaba/tongyi-deepresearch-30b-a3b:free",
-            "meituan/longcat-flash-chat:free",
-            "nvidia/nemotron-nano-9b-v2:free",
-            "openai/gpt-oss-120b:free",
-            "google/gemini-2.0-flash-exp:free" # Keep as fallback
+            "google/gemini-2.0-flash-exp:free"
         ]
         self.model_input.addItems(models)
         current_model = self.db.get_setting("openrouter_model")
@@ -2630,24 +2641,258 @@ class SettingsDialog(QDialog):
         self.base_url_input.setText(current_url if current_url else "https://openrouter.ai/api/v1")
         form.addRow("Base URL:", self.base_url_input)
 
-        layout.addLayout(form)
-        
-        info_label = QLabel("Yapay zeka analizleri için OpenRouter kullanılmaktadır. Ücretsiz modelleri (örn: gemini-2.0-flash-exp:free) tercih edebilirsiniz.")
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: gray; font-size: 9pt; margin-bottom: 10px;")
-        layout.addWidget(info_label)
+        api_layout.addLayout(form)
 
-        # Test Button
+        info_label = QLabel("Yapay zeka analizleri için OpenRouter kullanılmaktadır.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: gray; font-size: 9pt; margin: 10px 0;")
+        api_layout.addWidget(info_label)
+
         test_btn = QPushButton("🔌 Bağlantıyı Test Et")
         test_btn.clicked.connect(self.test_connection)
-        layout.addWidget(test_btn)
+        api_layout.addWidget(test_btn)
 
-        save_btn = QPushButton("💾 Kaydet")
-        save_btn.setStyleSheet("background-color: #4CAF50; color: white;")
+        api_layout.addStretch()
+        self.tabs.addTab(api_tab, "🤖 API Ayarları")
+
+        # --- Tab 2: Veri Kaynakları ---
+        sources_tab = QWidget()
+        sources_layout = QVBoxLayout(sources_tab)
+
+        # Üst bilgi
+        info_frame = QFrame()
+        info_frame.setStyleSheet("background-color: #E3F2FD; border-radius: 5px; padding: 10px;")
+        info_frame_layout = QVBoxLayout(info_frame)
+        info_title = QLabel("📁 PDF ve Analiz Dosyaları Yönetimi")
+        info_title.setStyleSheet("font-weight: bold; font-size: 11pt; color: #1565C0;")
+        info_frame_layout.addWidget(info_title)
+
+        # Klasör yollarını göster
+        paths_label = QLabel(f"PDF Klasörü: {self.pdf_folder}\nAnaliz Klasörü: {self.analiz_folder}")
+        paths_label.setStyleSheet("color: #546E7A; font-size: 8pt; font-family: monospace;")
+        info_frame_layout.addWidget(paths_label)
+        sources_layout.addWidget(info_frame)
+
+        # Dosya ekleme bölümü
+        add_frame = QFrame()
+        add_frame.setStyleSheet("background-color: #F5F5F5; border-radius: 5px; padding: 8px; margin: 5px 0;")
+        add_layout = QHBoxLayout(add_frame)
+
+        self.source_type_combo = QComboBox()
+        self.source_type_combo.addItems(["PDF (Birim Fiyat)", "ANALIZ (Poz Analizi)"])
+        self.source_type_combo.setMinimumWidth(160)
+        self.source_type_combo.currentIndexChanged.connect(self.load_folder_files)
+        add_layout.addWidget(QLabel("Klasör:"))
+        add_layout.addWidget(self.source_type_combo)
+
+        add_layout.addStretch()
+
+        add_file_btn = QPushButton("📄 Dosya Ekle")
+        add_file_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 6px 12px;")
+        add_file_btn.clicked.connect(self.add_file_to_folder)
+        add_layout.addWidget(add_file_btn)
+
+        open_folder_btn = QPushButton("📂 Klasörü Aç")
+        open_folder_btn.setStyleSheet("background-color: #607D8B; color: white; font-weight: bold; padding: 6px 12px;")
+        open_folder_btn.clicked.connect(self.open_current_folder)
+        add_layout.addWidget(open_folder_btn)
+
+        sources_layout.addWidget(add_frame)
+
+        # Dosyalar tablosu
+        self.files_table = QTableWidget()
+        self.files_table.setColumnCount(4)
+        self.files_table.setHorizontalHeaderLabels(['Dosya Adı', 'Boyut', 'Değiştirilme Tarihi', 'Durum'])
+        self.files_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.files_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.files_table.setStyleSheet("""
+            QTableWidget {
+                background-color: white;
+                border: 1px solid #E0E0E0;
+                border-radius: 4px;
+            }
+            QHeaderView::section {
+                background-color: #F5F5F5;
+                padding: 6px;
+                border: none;
+                border-bottom: 1px solid #E0E0E0;
+                font-weight: bold;
+            }
+        """)
+        sources_layout.addWidget(self.files_table)
+
+        # Dosya sayısı etiketi
+        self.file_count_label = QLabel("0 dosya")
+        self.file_count_label.setStyleSheet("color: #666; font-size: 9pt;")
+        sources_layout.addWidget(self.file_count_label)
+
+        # Alt butonlar
+        bottom_btn_layout = QHBoxLayout()
+
+        refresh_btn = QPushButton("🔄 Yenile")
+        refresh_btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold; padding: 8px;")
+        refresh_btn.clicked.connect(self.load_folder_files)
+        bottom_btn_layout.addWidget(refresh_btn)
+
+        bottom_btn_layout.addStretch()
+
+        delete_btn = QPushButton("🗑️ Seçili Dosyayı Sil")
+        delete_btn.setStyleSheet("background-color: #F44336; color: white; font-weight: bold; padding: 8px;")
+        delete_btn.clicked.connect(self.delete_selected_file)
+        bottom_btn_layout.addWidget(delete_btn)
+
+        sources_layout.addLayout(bottom_btn_layout)
+
+        self.tabs.addTab(sources_tab, "📂 Veri Kaynakları")
+
+        layout.addWidget(self.tabs)
+
+        # Kaydet butonu (altta)
+        save_btn = QPushButton("💾 Kaydet ve Kapat")
+        save_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; font-size: 11pt;")
         save_btn.clicked.connect(self.save_settings)
         layout.addWidget(save_btn)
 
         self.setLayout(layout)
+
+        # Dosyaları yükle
+        self.load_folder_files()
+
+    def get_current_folder(self):
+        """Seçili klasörü döndür"""
+        if self.source_type_combo.currentIndex() == 0:
+            return self.pdf_folder
+        else:
+            return self.analiz_folder
+
+    def load_folder_files(self):
+        """Seçili klasördeki dosyaları tabloya yükle"""
+        folder = self.get_current_folder()
+        self.files_table.setRowCount(0)
+
+        if not folder.exists():
+            self.file_count_label.setText("Klasör bulunamadı")
+            return
+
+        pdf_files = sorted(folder.glob("*.pdf"), key=lambda x: x.name.lower())
+
+        for i, pdf_file in enumerate(pdf_files):
+            self.files_table.insertRow(i)
+
+            # Dosya adı
+            name_item = QTableWidgetItem(pdf_file.name)
+            name_item.setData(Qt.UserRole, str(pdf_file))  # Tam yolu sakla
+            self.files_table.setItem(i, 0, name_item)
+
+            # Boyut
+            size_bytes = pdf_file.stat().st_size
+            if size_bytes < 1024:
+                size_str = f"{size_bytes} B"
+            elif size_bytes < 1024 * 1024:
+                size_str = f"{size_bytes / 1024:.1f} KB"
+            else:
+                size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
+            self.files_table.setItem(i, 1, QTableWidgetItem(size_str))
+
+            # Değiştirilme tarihi
+            from datetime import datetime
+            mtime = datetime.fromtimestamp(pdf_file.stat().st_mtime)
+            self.files_table.setItem(i, 2, QTableWidgetItem(mtime.strftime("%Y-%m-%d %H:%M")))
+
+            # Durum
+            status_item = QTableWidgetItem("✓ Mevcut")
+            status_item.setBackground(QColor('#E8F5E9'))
+            self.files_table.setItem(i, 3, status_item)
+
+        self.file_count_label.setText(f"{len(pdf_files)} dosya")
+
+    def add_file_to_folder(self):
+        """Dosya seç ve ilgili klasöre kopyala"""
+        import shutil
+
+        folder = self.get_current_folder()
+        folder_name = "PDF" if self.source_type_combo.currentIndex() == 0 else "ANALIZ"
+
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            f"{folder_name} Dosyası Seç",
+            "",
+            "PDF Dosyaları (*.pdf);;Tüm Dosyalar (*.*)"
+        )
+
+        if not file_paths:
+            return
+
+        added_count = 0
+        skipped_count = 0
+
+        for file_path in file_paths:
+            source = Path(file_path)
+            dest = folder / source.name
+
+            if dest.exists():
+                reply = QMessageBox.question(
+                    self, "Dosya Mevcut",
+                    f"'{source.name}' zaten mevcut.\nÜzerine yazmak istiyor musunuz?",
+                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel
+                )
+                if reply == QMessageBox.Cancel:
+                    break
+                elif reply == QMessageBox.No:
+                    skipped_count += 1
+                    continue
+
+            try:
+                shutil.copy2(str(source), str(dest))
+                added_count += 1
+            except Exception as e:
+                QMessageBox.warning(self, "Hata", f"Dosya kopyalanamadı: {source.name}\n{str(e)}")
+
+        self.load_folder_files()
+
+        if added_count > 0:
+            QMessageBox.information(self, "Başarılı", f"{added_count} dosya {folder_name} klasörüne eklendi.")
+
+    def delete_selected_file(self):
+        """Seçili dosyayı sil"""
+        current_row = self.files_table.currentRow()
+        if current_row < 0:
+            QMessageBox.warning(self, "Uyarı", "Lütfen silinecek dosyayı seçin.")
+            return
+
+        file_path = self.files_table.item(current_row, 0).data(Qt.UserRole)
+        file_name = self.files_table.item(current_row, 0).text()
+
+        reply = QMessageBox.question(
+            self, "Dosya Sil",
+            f"'{file_name}' dosyasını kalıcı olarak silmek istiyor musunuz?\n\n⚠️ Bu işlem geri alınamaz!",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            try:
+                Path(file_path).unlink()
+                self.load_folder_files()
+                QMessageBox.information(self, "Başarılı", f"'{file_name}' silindi.")
+            except Exception as e:
+                QMessageBox.critical(self, "Hata", f"Dosya silinemedi: {str(e)}")
+
+    def open_current_folder(self):
+        """Seçili klasörü dosya yöneticisinde aç"""
+        import subprocess
+        import platform
+
+        folder = self.get_current_folder()
+
+        try:
+            if platform.system() == "Windows":
+                subprocess.Popen(f'explorer "{folder}"')
+            elif platform.system() == "Darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except Exception as e:
+            QMessageBox.warning(self, "Hata", f"Klasör açılamadı: {str(e)}")
 
     def test_connection(self):
         """OpenRouter bağlantısını test et"""
@@ -2665,20 +2910,19 @@ class SettingsDialog(QDialog):
                 "Authorization": f"Bearer {key}",
                 "Content-Type": "application/json"
             }
-            # Simple chat completion test
             data = {
                 "model": model,
                 "messages": [{"role": "user", "content": "Test."}],
                 "max_tokens": 5
             }
-            
+
             response = requests.post(f"{base_url}/chat/completions", headers=headers, json=data, timeout=10)
-            
+
             if response.status_code == 200:
-                QMessageBox.information(self, "Başarılı", "✅ Bağlantı başarılı! OpenRouter çalışıyor.")
+                QMessageBox.information(self, "Başarılı", "✅ Bağlantı başarılı!")
             else:
-                QMessageBox.critical(self, "Hata", f"❌ Bağlantı başarsız!\nKod: {response.status_code}\nMesaj: {response.text}")
-                
+                QMessageBox.critical(self, "Hata", f"❌ Bağlantı başarısız!\nKod: {response.status_code}")
+
         except Exception as e:
             QMessageBox.critical(self, "Hata", f"❌ Bağlantı hatası: {str(e)}")
 
@@ -2686,12 +2930,12 @@ class SettingsDialog(QDialog):
         key = self.api_key_input.text().strip()
         model = self.model_input.currentText().strip()
         base_url = self.base_url_input.text().strip()
-        
+
         self.db.set_setting("openrouter_api_key", key)
         self.db.set_setting("openrouter_model", model)
         self.db.set_setting("openrouter_base_url", base_url)
-        
-        QMessageBox.information(self, "Başarılı", "Ayarlar başarıyla kaydedildi.")
+
+        QMessageBox.information(self, "Başarılı", "Ayarlar kaydedildi.")
         self.accept()
 
 class PDFSearchAppPyQt5(QMainWindow):
@@ -2702,22 +2946,39 @@ class PDFSearchAppPyQt5(QMainWindow):
         self.current_results = []
         self.loading_thread = None
         self.internal_pdf_dir = Path(__file__).resolve().parent / "PDF"
+        self.analiz_dir = Path(__file__).resolve().parent / "ANALIZ"
+
+        # Database manager
+        from database import DatabaseManager
+        self.db = DatabaseManager()
+
+        # Pencere ikonu ayarla (farklı boyutlarda)
+        icon_path = Path(__file__).resolve().parent / "yaklasik_maliyet.png"
+        if icon_path.exists():
+            icon = QIcon()
+            for size in [16, 24, 32, 48, 64, 128, 256]:
+                icon.addFile(str(icon_path), QSize(size, size))
+            self.setWindowIcon(icon)
 
         # Loading animasyonu için
         self.loading_timer = QTimer()
         self.loading_timer.timeout.connect(self.update_loading_animation)
         self.loading_dots = 0
         self.base_loading_text = ""
-        
-        self.csv_selected_pozlar = [] # Initialize selected poz list
-        
+
+        self.csv_selected_pozlar = []  # Initialize selected poz list
+
+        # Dosya değişiklik bilgisi
+        self.changed_files = []
+        self.missing_files = []
+
         # Async Scan Timer
         self.scan_timer = QTimer()
         self.scan_timer.setSingleShot(True)
         self.scan_timer.timeout.connect(self.start_delayed_loading)
 
         self.setup_ui()
-        
+
         # Uygulama tamamen açıldıktan 500ms sonra yüklemeye başla
         self.scan_timer.start(500)
 
@@ -2757,6 +3018,66 @@ class PDFSearchAppPyQt5(QMainWindow):
         # Ana layout
         main_layout = QVBoxLayout()
         central_widget.setLayout(main_layout)
+
+        # === GÜNCELLEME BANNER'I (varsayılan gizli) ===
+        self.update_banner = QFrame()
+        self.update_banner.setStyleSheet("""
+            QFrame {
+                background-color: #FFF3E0;
+                border: 2px solid #FF9800;
+                border-radius: 5px;
+                padding: 8px;
+            }
+        """)
+        banner_layout = QHBoxLayout(self.update_banner)
+        banner_layout.setContentsMargins(10, 5, 10, 5)
+
+        self.update_icon_label = QLabel("⚠️")
+        self.update_icon_label.setStyleSheet("font-size: 16pt;")
+        banner_layout.addWidget(self.update_icon_label)
+
+        self.update_text_label = QLabel("PDF dosyalarında değişiklik tespit edildi!")
+        self.update_text_label.setStyleSheet("font-weight: bold; color: #E65100; font-size: 10pt;")
+        banner_layout.addWidget(self.update_text_label)
+
+        banner_layout.addStretch()
+
+        self.update_btn = QPushButton("🔄 Verileri Güncelle")
+        self.update_btn.setCursor(Qt.PointingHandCursor)
+        self.update_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                font-weight: bold;
+                padding: 6px 15px;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #F57C00;
+            }
+        """)
+        self.update_btn.clicked.connect(self.refresh_all_data)
+        banner_layout.addWidget(self.update_btn)
+
+        self.dismiss_btn = QPushButton("✕")
+        self.dismiss_btn.setCursor(Qt.PointingHandCursor)
+        self.dismiss_btn.setFixedSize(25, 25)
+        self.dismiss_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: none;
+                font-size: 14pt;
+                color: #666;
+            }
+            QPushButton:hover {
+                color: #333;
+            }
+        """)
+        self.dismiss_btn.clicked.connect(self.hide_update_banner)
+        banner_layout.addWidget(self.dismiss_btn)
+
+        self.update_banner.setVisible(False)  # Varsayılan gizli
+        main_layout.addWidget(self.update_banner)
 
         # Aktif Proje Bilgisi Header
         self.project_header = QGroupBox("Aktif Proje")
@@ -3033,6 +3354,128 @@ class PDFSearchAppPyQt5(QMainWindow):
         """Ayarlar penceresini aç"""
         dialog = SettingsDialog(self)
         dialog.exec_()
+        # Ayarlar kapatıldığında dosya değişikliğini kontrol et
+        self.check_file_changes()
+
+    def check_file_changes(self):
+        """PDF ve Analiz klasörlerindeki dosya değişikliklerini kontrol et"""
+        try:
+            self.changed_files = []
+
+            # PDF klasöründeki dosyaları kontrol et
+            pdf_files = list(self.internal_pdf_dir.glob("*.pdf")) if self.internal_pdf_dir.exists() else []
+            analiz_files = list(self.analiz_dir.glob("*.pdf")) if self.analiz_dir.exists() else []
+
+            # Kayıtlı hash'leri al
+            last_pdf_hash = self.db.get_setting("pdf_folder_hash")
+            last_analiz_hash = self.db.get_setting("analiz_folder_hash")
+
+            # Mevcut hash'leri hesapla
+            current_pdf_hash = self._calculate_folder_hash(pdf_files)
+            current_analiz_hash = self._calculate_folder_hash(analiz_files)
+
+            # Değişiklik var mı kontrol et
+            pdf_changed = last_pdf_hash != current_pdf_hash if last_pdf_hash else False
+            analiz_changed = last_analiz_hash != current_analiz_hash if last_analiz_hash else False
+
+            if pdf_changed or analiz_changed:
+                changes = []
+                if pdf_changed:
+                    changes.append("PDF dosyaları")
+                if analiz_changed:
+                    changes.append("Analiz dosyaları")
+
+                self.show_update_banner(f"{', '.join(changes)} değişmiş!")
+            else:
+                # İlk çalıştırmada hash'leri kaydet
+                if not last_pdf_hash:
+                    self.db.set_setting("pdf_folder_hash", current_pdf_hash)
+                if not last_analiz_hash:
+                    self.db.set_setting("analiz_folder_hash", current_analiz_hash)
+
+        except Exception as e:
+            print(f"Dosya değişiklik kontrolü hatası: {e}")
+
+    def _calculate_folder_hash(self, files):
+        """Klasördeki dosyaların birleşik hash'ini hesapla"""
+        import hashlib
+        hash_data = ""
+        for f in sorted(files, key=lambda x: x.name):
+            try:
+                stat = f.stat()
+                hash_data += f"{f.name}_{stat.st_size}_{stat.st_mtime}_"
+            except:
+                pass
+        return hashlib.md5(hash_data.encode()).hexdigest() if hash_data else ""
+
+    def show_update_banner(self, message="PDF dosyalarında değişiklik tespit edildi!"):
+        """Güncelleme banner'ını göster"""
+        self.update_text_label.setText(f"⚠️ {message}")
+        self.update_banner.setVisible(True)
+
+    def hide_update_banner(self):
+        """Güncelleme banner'ını gizle"""
+        self.update_banner.setVisible(False)
+
+    def refresh_all_data(self):
+        """Tüm verileri yenile - cache temizle ve yeniden yükle"""
+        self.hide_update_banner()
+        self.file_label.setText("🔄 Veriler yenileniyor...")
+
+        # Loading göster
+        self.update_btn.setEnabled(False)
+        self.update_btn.setText("⏳ Güncelleniyor...")
+
+        # Cache temizle
+        try:
+            if hasattr(self.search_engine, 'clear_cache'):
+                self.search_engine.clear_cache()
+        except:
+            pass
+
+        # CSV verilerini temizle ve yeniden yükle
+        self.csv_manager.poz_data = {}
+
+        # Yeni hash'leri kaydet
+        pdf_files = list(self.internal_pdf_dir.glob("*.pdf")) if self.internal_pdf_dir.exists() else []
+        analiz_files = list(self.analiz_dir.glob("*.pdf")) if self.analiz_dir.exists() else []
+        self.db.set_setting("pdf_folder_hash", self._calculate_folder_hash(pdf_files))
+        self.db.set_setting("analiz_folder_hash", self._calculate_folder_hash(analiz_files))
+
+        # Yeniden yüklemeyi başlat
+        QTimer.singleShot(500, self._complete_refresh)
+
+    def _complete_refresh(self):
+        """Yenileme işlemini tamamla"""
+        try:
+            # CSV'leri yeniden yükle
+            self.csv_loader = CSVLoaderThread(self.csv_manager.csv_folder)
+            self.csv_loader.finished.connect(self._on_refresh_complete)
+            self.csv_loader.error.connect(lambda e: self._on_refresh_error(e))
+            self.csv_loader.start()
+        except Exception as e:
+            self._on_refresh_error(str(e))
+
+    def _on_refresh_complete(self, data, count):
+        """Yenileme tamamlandığında"""
+        self.csv_manager.poz_data = data
+        self.csv_poz_data = list(data.values())
+
+        if hasattr(self, 'csv_poz_table'):
+            self.display_csv_pozlar(self.csv_poz_data)
+
+        self.file_label.setText(f"✅ Veriler güncellendi: {count} poz yüklendi")
+        self.update_btn.setEnabled(True)
+        self.update_btn.setText("🔄 Verileri Güncelle")
+
+        QMessageBox.information(self, "Güncelleme Tamamlandı",
+                                f"Veriler başarıyla güncellendi.\n{count} poz yüklendi.")
+
+    def _on_refresh_error(self, error):
+        """Yenileme hatası"""
+        self.file_label.setText(f"❌ Güncelleme hatası: {error}")
+        self.update_btn.setEnabled(True)
+        self.update_btn.setText("🔄 Verileri Güncelle")
 
     def load_pdf_file(self):
         """Tek PDF dosyası yükle"""
@@ -3126,16 +3569,22 @@ class PDFSearchAppPyQt5(QMainWindow):
             csv_count = len(self.csv_manager.poz_data)
             if csv_count > 0:
                 self.file_label.setText(f"CSV'den yüklendi: {csv_count} poz")
+                # Dosya değişikliği kontrolü
+                QTimer.singleShot(1000, self.check_file_changes)
                 return
 
             # CSV bulunamazsa PDF'den cache yükle
             if self.search_engine.load_cache():
                 self.file_label.setText(f"Cache'den yüklendi: {len(self.search_engine.loaded_files)} PDF")
                 self.list_loaded_pdfs_on_label()
+                # Dosya değişikliği kontrolü
+                QTimer.singleShot(1000, self.check_file_changes)
                 return
 
             # Cache başarısızsa normal yükleme yap
             self.scan_internal_pdf_folder()
+            # Dosya değişikliği kontrolü
+            QTimer.singleShot(2000, self.check_file_changes)
 
         except Exception as e:
             self.file_label.setText(f"Yükleme hatası: {str(e)}")
@@ -3635,6 +4084,14 @@ class PDFSearchAppPyQt5(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setStyle('Fusion')  # Modern görünüm
+
+    # Uygulama ikonu ayarla (tüm pencereler için)
+    icon_path = Path(__file__).resolve().parent / "yaklasik_maliyet.png"
+    if icon_path.exists():
+        icon = QIcon()
+        for size in [16, 24, 32, 48, 64, 128, 256]:
+            icon.addFile(str(icon_path), QSize(size, size))
+        app.setWindowIcon(icon)
 
     window = PDFSearchAppPyQt5()
     window.show()

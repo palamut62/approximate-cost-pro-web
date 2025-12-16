@@ -18,8 +18,8 @@ from PyQt5.QtWidgets import (
     QMessageBox, QProgressBar, QGroupBox, QHeaderView, QSplitter,
     QTabWidget, QSpinBox, QCheckBox, QComboBox, QTextEdit, QFrame
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
+from PyQt5.QtGui import QFont, QColor, QIcon
 
 
 class PDFPozExtractor:
@@ -321,6 +321,14 @@ class PozExtractorUI(QMainWindow):
         self.setWindowTitle("Poz Birim Fiyat Çıkarıcı")
         self.setGeometry(100, 100, 1200, 700)
 
+        # Pencere ikonu ayarla (farklı boyutlarda)
+        icon_path = Path(__file__).parent / "yaklasik_maliyet.png"
+        if icon_path.exists():
+            icon = QIcon()
+            for size in [16, 24, 32, 48, 64, 128, 256]:
+                icon.addFile(str(icon_path), QSize(size, size))
+            self.setWindowIcon(icon)
+
         self.pdf_files = []
         self.extracted_data = []
         self.extractor_thread = None
@@ -543,6 +551,14 @@ def main():
 
     # Stil
     app.setStyle('Fusion')
+
+    # Uygulama ikonu ayarla
+    icon_path = Path(__file__).parent / "yaklasik_maliyet.png"
+    if icon_path.exists():
+        icon = QIcon()
+        for size in [16, 24, 32, 48, 64, 128, 256]:
+            icon.addFile(str(icon_path), QSize(size, size))
+        app.setWindowIcon(icon)
 
     window = PozExtractorUI()
     window.show()
