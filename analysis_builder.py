@@ -1,17 +1,45 @@
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QTableWidget, QTableWidgetItem, 
                              QHeaderView, QLineEdit, QGroupBox, QTextEdit,
-                             QMessageBox, QInputDialog, QProgressBar, QFormLayout)
+                             QMessageBox, QInputDialog, QProgressBar, QFormLayout, QDialog,
+                             QPlainTextEdit, QDialogButtonBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from database import DatabaseManager
 import json
 import requests
 import re
+import re
+
+class AIPromptDialog(QDialog):
+    def __init__(self, parent=None, title="AI Asistan", label="Talep:"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.resize(500, 300)
+        self.setup_ui(label)
+        
+    def setup_ui(self, label_text):
+        layout = QVBoxLayout(self)
+        
+        layout.addWidget(QLabel(label_text))
+        
+        self.input_text = QPlainTextEdit()
+        self.input_text.setPlaceholderText("Buraya detaylıca yazın...")
+        self.input_text.setLineWrapMode(QPlainTextEdit.WidgetWidth) # Force wrap
+        layout.addWidget(self.input_text)
+        
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+        
+    def get_text(self):
+        return self.input_text.toPlainText()
 
 class AIAnalysisThread(QThread):
     finished = pyqtSignal(list, str, str) # components, explanation, error
+    status_update = pyqtSignal(str)
     
-    def __init__(self, description, unit, api_key, model, base_url, context_data=""):
+    def __init__(self, description, unit, api_key, model, base_url, context_data="", gemini_key=None, gemini_model=None, provider="OpenRouter"):
         super().__init__()
         self.description = description
         self.unit = unit
@@ -19,117 +47,152 @@ class AIAnalysisThread(QThread):
         self.model = model
         self.base_url = base_url
         self.context_data = context_data
+        self.gemini_key = gemini_key
+        self.gemini_model = gemini_model
+        self.provider = provider
         
     def run(self):
+        # PROMPT ENGINEERING FOR TURKISH COMPLIANCE
+        prompt = f"""
+        Sen uzman bir Türk İnşaat Metraj ve Hakediş Mühendisisin.
+        
+        Görev: Aşağıdaki poz tanımı için "Çevre ve Şehircilik Bakanlığı" birim fiyat analiz formatına uygun detaylı bir analiz oluştur.
+        
+        Poz Tanımı: {self.description}
+        Poz Birimi: {self.unit}
+        
+        EK BAĞLAM (MEVCUT KAYNAKLARDAN BULUNAN İLGİLİ POZLAR):
+        {self.context_data}
+        
+        Kurallar:
+        1. Analiz şu bileşenleri içermelidir:
+           - Malzeme (Örn: Çimento, Kum, Tuğla, vb.)
+           - İşçilik (Örn: Usta, Düz işçi)
+           - Makine (varsa)
+        4. Miktarlar gerçekçi inşaat normlarına (analiz kitaplarına) dayanmalıdır.
+        5. Birim fiyatlar 2024-2025 yılı ortalama piyasa rayiçleri (TL) olmalıdır.
+        6. Çıktı SADECE geçerli bir JSON formatında olmalı.
+        7. Lütfen JSON içindeki metin alanlarında çift tırnak (") kullanmaktan kaçının veya escape edin (\").
+        
+        JSON Formatı Şablonu:
+        {{
+          "explanation": "Bu analizi oluştururken ... mantığını kullandım. Şu pozları referans aldım: ...",
+          "components": [
+              {{ "type": "Malzeme", "code": "10.xxx", "name": "Malzeme Adı", "unit": "kg/m/adet", "quantity": 0.0, "unit_price": 0.0 }},
+              {{ "type": "İşçilik", "code": "01.xxx", "name": "İşçilik Adı", "unit": "sa", "quantity": 0.0, "unit_price": 0.0 }}
+          ]
+        }}
+        
+        Lütfen "explanation" kısmında neden bu malzemeleri ve miktarları seçtiğini, hangi yöntemle hesapladığını detaylıca anlat.
         """
-        Call OpenRouter API to generate analysis
-        """
+
+        if self.provider == "Google Gemini":
+             if self.gemini_key:
+                try:
+                    self.status_update.emit("🤖 Gemini ile hesaplanıyor...")
+                    self.call_gemini(prompt)
+                    return
+                except Exception as e:
+                     self.status_update.emit("⚠️ Gemini hatası, OpenRouter deneniyor...")
+             else:
+                 self.status_update.emit("⚠️ Gemini anahtarı yok, OpenRouter kullanılıyor...")
+        
+        # Default (OpenRouter) or Fallback
         try:
             if not self.api_key:
                 raise Exception("API Anahtarı eksik! Ayarlar'dan ekleyiniz.")
 
-            # PROMPT ENGINEERING FOR TURKISH COMPLIANCE
-            prompt = f"""
-            Sen uzman bir Türk İnşaat Metraj ve Hakediş Mühendisisin.
-            
-            Görev: Aşağıdaki poz tanımı için "Çevre ve Şehircilik Bakanlığı" birim fiyat analiz formatına uygun detaylı bir analiz oluştur.
-            
-            Poz Tanımı: {self.description}
-            Poz Birimi: {self.unit}
-            
-            EK BAĞLAM (MEVCUT KAYNAKLARDAN BULUNAN İLGİLİ POZLAR):
-            {self.context_data}
-            
-            Kurallar:
-            1. Analiz şu bileşenleri içermelidir:
-               - Malzeme (Örn: Çimento, Kum, Tuğla, vb.)
-               - İşçilik (Örn: Usta, Düz işçi)
-               - Makine (varsa)
-            4. Miktarlar gerçekçi inşaat normlarına (analiz kitaplarına) dayanmalıdır.
-            5. Birim fiyatlar 2024-2025 yılı ortalama piyasa rayiçleri (TL) olmalıdır.
-            6. Çıktı SADECE geçerli bir JSON formatında olmalı.
-            7. Lütfen JSON içindeki metin alanlarında çift tırnak (") kullanmaktan kaçının veya escape edin (\").
-            
-            JSON Formatı Şablonu:
-            {{
-              "explanation": "Bu analizi oluştururken ... mantığını kullandım. Şu pozları referans aldım: ...",
-              "components": [
-                  {{ "type": "Malzeme", "code": "10.xxx", "name": "Malzeme Adı", "unit": "kg/m/adet", "quantity": 0.0, "unit_price": 0.0 }},
-                  {{ "type": "İşçilik", "code": "01.xxx", "name": "İşçilik Adı", "unit": "sa", "quantity": 0.0, "unit_price": 0.0 }}
-              ]
-            }}
-            
-            Lütfen "explanation" kısmında neden bu malzemeleri ve miktarları seçtiğini, hangi yöntemle hesapladığını detaylıca anlat.
-            """
+            self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
+            self.call_openrouter(prompt)
 
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "HTTP-Referer": "https://yaklasikmaliyetpro.com", # Required by OpenRouter
-                "X-Title": "Yaklasik Maliyet Pro"
-            }
-            
-            data = {
-                "model": self.model,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful construction estimation assistant. Output valid JSON only."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.2, # Low temperature for more deterministic/factual output
-                "max_tokens": 2000
-            }
-            
-            response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=30)
-            
-            if response.status_code != 200:
-                raise Exception(f"API Hatası: {response.text}")
-                
-            result = response.json()
-            content = result['choices'][0]['message']['content']
-            
-            # Clean Markdown if exists
-            content = self.clean_json_string(content)
-            
-            data = json.loads(content)
-            
-            # Handle both old (list) and new (dict) formats for robustness
-            if isinstance(data, list):
-                components = data
-                explanation = "Açıklama mevcut değil."
-            else:
-                components = data.get('components', [])
-                explanation = data.get('explanation', "Açıklama yapılmadı.")
-            
-            # Calculate totals for verify
-            for comp in components:
-                comp['total_price'] = float(comp['quantity']) * float(comp['unit_price'])
-                
-            self.finished.emit(components, explanation, "")
-            
         except Exception as e:
-            self.finished.emit([], "", str(e))
+            # Fallback to Gemini if OpenRouter was primary
+            if self.provider != "Google Gemini" and self.gemini_key:
+                try:
+                    self.status_update.emit("⚠️ OpenRouter hatası, Gemini deneniyor...")
+                    self.call_gemini(prompt)
+                except Exception as gemini_e:
+                     self.finished.emit([], "", f"Tüm kaynaklar başarısız.\nOR: {e}\nGemini: {gemini_e}")
+            else:
+                self.finished.emit([], "", str(e))
+
+    def call_openrouter(self, prompt):
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://yaklasikmaliyetpro.com",
+            "X-Title": "Yaklasik Maliyet Pro"
+        }
+        
+        data = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "You are a helpful construction estimation assistant. Output valid JSON only."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2, 
+            "max_tokens": 2000
+        }
+        
+        response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=30)
+        
+        if response.status_code != 200:
+            raise Exception(f"API Hatası: {response.text}")
+            
+        result = response.json()
+        content = result['choices'][0]['message']['content']
+        self.process_response(content)
+
+    def call_gemini(self, prompt):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent?key={self.gemini_key}"
+        
+        final_prompt = "You are a helpful construction estimation assistant. Output valid JSON only.\n" + prompt
+        
+        data = {
+            "contents": [{"parts": [{"text": final_prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"}
+        }
+        
+        response = requests.post(url, json=data, timeout=30)
+        
+        if response.status_code != 200:
+             raise Exception(f"Gemini Hatası: {response.text}")
+             
+        result = response.json()
+        if 'candidates' in result and result['candidates']:
+            content = result['candidates'][0]['content']['parts'][0]['text']
+            self.process_response(content)
+        else:
+            raise Exception("Gemini boş yanıt döndürdü.")
+
+    def process_response(self, content):
+        content = self.clean_json_string(content)
+        data = json.loads(content)
+        
+        # Handle formats
+        if isinstance(data, list):
+            components = data
+            explanation = "Açıklama mevcut değil."
+        else:
+            components = data.get('components', [])
+            explanation = data.get('explanation', "Açıklama yapılmadı.")
+        
+        # Calculate totals
+        for comp in components:
+            comp['total_price'] = float(comp['quantity']) * float(comp['unit_price'])
+            
+        self.finished.emit(components, explanation, "")
 
     def clean_json_string(self, s):
         """Remove markdown code blocks from string and try to extract JSON"""
         s = s.strip()
-        
-        # Markdown clean
-        if s.startswith("```json"):
-            s = s[7:]
-        if s.startswith("```"):
-            s = s[3:]
-        if s.endswith("```"):
-            s = s[:-3]
-            
-        # Regex extraction as fallback if full string isn't valid JSON
+        if s.startswith("```json"): s = s[7:]
+        if s.startswith("```"): s = s[3:]
+        if s.endswith("```"): s = s[:-3]
         try:
-            # En dıştaki { } bloğunu bulmayı dene
             match = re.search(r'\{.*\}', s.strip(), re.DOTALL)
-            if match:
-                return match.group(0)
-        except:
-            pass
-            
+            if match: return match.group(0)
+        except: pass
         return s.strip()
 
 class AnalysisBuilder(QWidget):
@@ -246,14 +309,18 @@ class AnalysisBuilder(QWidget):
         self.comp_table.itemChanged.connect(self.on_item_changed)
 
     def start_ai_generation(self):
-        # 1. Ask user for the request via Dialog
-        text, ok = QInputDialog.getMultiLineText(
+        dialog = AIPromptDialog(
             self, 
             "Yapay Zeka Analiz Asistanı", 
             "Analiz talebinizi detaylıca yazın (Örn: 'C25 beton dökülmesi, nakliye ve kalıp dahil'):"
         )
         
-        if not ok or not text.strip():
+        if dialog.exec_() != QDialog.Accepted:
+             return
+             
+        text = dialog.get_text()
+        
+        if not text.strip():
             return
             
         desc = text.strip()
@@ -270,13 +337,20 @@ class AnalysisBuilder(QWidget):
         model = self.db.get_setting("openrouter_model") or "google/gemini-2.0-flash-exp:free"
         base_url = self.db.get_setting("openrouter_base_url") or "https://openrouter.ai/api/v1"
         
+        # Gemini Settings (Failover)
+        gemini_key = self.db.get_setting("gemini_api_key")
+        gemini_model = self.db.get_setting("gemini_model") or "gemini-1.5-flash"
+        
+        provider = self.db.get_setting("ai_provider") or "OpenRouter"
+        
         self.set_loading(True)
         
         # RAG Implementation: Extract keywords and search context
         context_text = self.extract_and_format_context(desc)
         
-        self.thread = AIAnalysisThread(desc, unit, api_key, model, base_url, context_text)
+        self.thread = AIAnalysisThread(desc, unit, api_key, model, base_url, context_text, gemini_key, gemini_model, provider)
         self.thread.finished.connect(self.on_ai_finished)
+        self.thread.status_update.connect(lambda s: self.generate_btn.setText(s))
         self.thread.start()
 
     def extract_and_format_context(self, description):
@@ -313,9 +387,19 @@ class AnalysisBuilder(QWidget):
                     break
         
         if not found_items:
-            return "İlgili poz bulunamadı."
+            # return "İlgili poz bulunamadı."
+            context_str = "PDF Araması: İlgili poz bulunamadı.\n"
+        else:
+            context_str = "PDF Kaynaklı Bilgiler:\n" + "\n".join(found_items) + "\n"
             
-        return "\n".join(found_items)
+        # Add Quantity Takeoff Context
+        takeoffs = self.db.get_quantity_takeoffs()
+        if takeoffs:
+            context_str += "\nPROJE İMALAT METRAJLARI (Bu projedeki gerçek ölçümler):\n"
+            for t in takeoffs:
+                context_str += f"- {t['description']}: {t['quantity']} {t['unit']} (Benzer:{t['similar_count']}, Boy:{t['length']}, En:{t['width']}, Yük:{t['height']}) - Not: {t['notes']}\n"
+                
+        return context_str
         
     def set_loading(self, loading):
         self.generate_btn.setEnabled(not loading)

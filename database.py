@@ -120,6 +120,50 @@ class DatabaseManager:
             )
         ''')
 
+        # Proje İmalat Metrajları
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS quantity_takeoffs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                description TEXT,
+                similar_count REAL DEFAULT 1,
+                length REAL,
+                width REAL,
+                height REAL,
+                quantity REAL,
+                unit TEXT,
+                notes TEXT,
+                created_date TEXT
+            )
+        ''')
+        
+        # Quantity Groups (İmalat Grupları)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS quantity_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                unit TEXT,
+                created_date TEXT
+            )
+        ''')
+
+        # Migration: Add group_id to quantity_takeoffs if not exists
+        try:
+            cursor.execute('ALTER TABLE quantity_takeoffs ADD COLUMN group_id INTEGER REFERENCES quantity_groups(id) ON DELETE CASCADE')
+        except:
+            pass
+
+        # Migration: Add user_prompt to quantity_groups if not exists
+        try:
+            cursor.execute('ALTER TABLE quantity_groups ADD COLUMN user_prompt TEXT')
+        except:
+            pass
+
+        # Migration: Add methodology to quantity_groups if not exists
+        try:
+            cursor.execute('ALTER TABLE quantity_groups ADD COLUMN methodology TEXT')
+        except:
+            pass
+
         conn.commit()
         conn.close()
 
@@ -547,3 +591,91 @@ class DatabaseManager:
         conn.commit()
         conn.close()
         return True
+        return True
+
+        conn.commit()
+        conn.close()
+        return True
+
+    def get_takeoffs_by_group(self, group_id):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM quantity_takeoffs WHERE group_id = ? ORDER BY id', (group_id,))
+        columns = [description[0] for description in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    # --- Quantity Group Methods ---
+    def add_quantity_group(self, name, unit, user_prompt=None, methodology=None):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        cursor.execute('INSERT INTO quantity_groups (name, unit, created_date, user_prompt, methodology) VALUES (?, ?, ?, ?, ?)', (name, unit, now, user_prompt, methodology))
+        group_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return group_id
+
+    def get_quantity_groups(self):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM quantity_groups ORDER BY created_date DESC')
+        columns = [description[0] for description in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def delete_quantity_group(self, group_id):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        # Delete items first (though cascade might work if enabled)
+        cursor.execute('DELETE FROM quantity_takeoffs WHERE group_id = ?', (group_id,))
+        cursor.execute('DELETE FROM quantity_groups WHERE id = ?', (group_id,))
+        conn.commit()
+        conn.close()
+
+    # --- Quantity Takeoff Methods ---
+    def add_quantity_takeoff(self, description, similar_count, length, width, height, quantity, unit, notes, group_id=None):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+        cursor.execute('''
+            INSERT INTO quantity_takeoffs (description, similar_count, length, width, height, quantity, unit, notes, created_date, group_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (description, similar_count, length, width, height, quantity, unit, notes, now, group_id))
+        
+        takeoff_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return takeoff_id
+        
+    def get_quantity_takeoffs(self):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM quantity_takeoffs ORDER BY created_date DESC')
+        columns = [description[0] for description in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return results
+        
+    def delete_quantity_takeoff(self, takeoff_id):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM quantity_takeoffs WHERE id = ?', (takeoff_id,))
+        conn.commit()
+        conn.close()
+        
+    def update_quantity_takeoff(self, takeoff_id, description, similar_count, length, width, height, quantity, unit, notes):
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            UPDATE quantity_takeoffs 
+            SET description = ?, similar_count = ?, length = ?, width = ?, height = ?, quantity = ?, unit = ?, notes = ?
+            WHERE id = ?
+        ''', (description, similar_count, length, width, height, quantity, unit, notes, takeoff_id))
+        
+        conn.commit()
+        conn.close()

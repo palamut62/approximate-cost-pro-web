@@ -26,6 +26,7 @@ from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QPixmap, QColor
 from cost_estimator import CostEstimator
 from analysis_builder import AnalysisBuilder
 from custom_analysis_manager import CustomAnalysisManager
+from quantity_takeoff_manager import QuantityTakeoffManager
 
 class PDFSearchEngine:
     def __init__(self):
@@ -2609,6 +2610,14 @@ class SettingsDialog(QDialog):
         api_layout = QVBoxLayout(api_tab)
         form = QFormLayout()
 
+        # Default Provider Selection
+        self.provider_input = QComboBox()
+        self.provider_input.addItems(["OpenRouter", "Google Gemini"])
+        current_provider = self.db.get_setting("ai_provider")
+        if current_provider:
+            self.provider_input.setCurrentText(current_provider)
+        form.addRow("Varsayılan AI Sağlayıcı:", self.provider_input)
+
         # API Key
         self.api_key_input = QLineEdit()
         current_key = self.db.get_setting("openrouter_api_key")
@@ -2633,24 +2642,58 @@ class SettingsDialog(QDialog):
             self.model_input.setCurrentText(current_model)
         else:
             self.model_input.setCurrentText(models[0])
-        form.addRow("Model:", self.model_input)
+        form.addRow("OpenRouter Model:", self.model_input)
 
         # Base URL (Advanced)
         self.base_url_input = QLineEdit()
         current_url = self.db.get_setting("openrouter_base_url")
         self.base_url_input.setText(current_url if current_url else "https://openrouter.ai/api/v1")
-        form.addRow("Base URL:", self.base_url_input)
+        form.addRow("OpenRouter Base URL:", self.base_url_input)
+
+        # --- Google Gemini Settings ---
+        form.addRow(QLabel("<b>Google Gemini Ayarları</b>"))
+        
+        self.gemini_key_input = QLineEdit()
+        gemini_key = self.db.get_setting("gemini_api_key")
+        if gemini_key:
+            self.gemini_key_input.setText(gemini_key)
+        self.gemini_key_input.setPlaceholderText("AIzaSy...")
+        form.addRow("Google API Key:", self.gemini_key_input)
+        
+        self.gemini_model_input = QComboBox()
+        self.gemini_model_input.setEditable(True)
+        gemini_models = [
+            "gemini-1.5-flash",
+            "gemini-1.5-pro",
+            "gemini-pro"
+        ]
+        self.gemini_model_input.addItems(gemini_models)
+        current_gemini_model = self.db.get_setting("gemini_model")
+        if current_gemini_model:
+            self.gemini_model_input.setCurrentText(current_gemini_model)
+        else:
+            self.gemini_model_input.setCurrentText(gemini_models[0])
+        form.addRow("Google Model:", self.gemini_model_input)
 
         api_layout.addLayout(form)
 
-        info_label = QLabel("Yapay zeka analizleri için OpenRouter kullanılmaktadır.")
+        info_label = QLabel("Yapay zeka analizleri için seçilen sağlayıcı kullanılır. Hata durumunda diğerine geçiş yapılır.")
         info_label.setWordWrap(True)
         info_label.setStyleSheet("color: gray; font-size: 9pt; margin: 10px 0;")
         api_layout.addWidget(info_label)
 
-        test_btn = QPushButton("🔌 Bağlantıyı Test Et")
-        test_btn.clicked.connect(self.test_connection)
-        api_layout.addWidget(test_btn)
+        # Buttons Layout
+        btn_layout = QHBoxLayout()
+        
+        test_or_btn = QPushButton("🔌 OpenRouter Test Et")
+        test_or_btn.clicked.connect(self.test_connection)
+        btn_layout.addWidget(test_or_btn)
+        
+        test_gemini_btn = QPushButton("🔌 Gemini Test Et")
+        test_gemini_btn.clicked.connect(self.test_gemini_connection)
+        btn_layout.addWidget(test_gemini_btn)
+        
+        api_layout.addLayout(btn_layout)
 
         api_layout.addStretch()
         self.tabs.addTab(api_tab, "🤖 API Ayarları")
@@ -2926,14 +2969,46 @@ class SettingsDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Hata", f"❌ Bağlantı hatası: {str(e)}")
 
+    def test_gemini_connection(self):
+        """Google Gemini bağlantısını test et"""
+        import requests
+        key = self.gemini_key_input.text().strip()
+        model = self.gemini_model_input.currentText().strip()
+
+        if not key:
+            QMessageBox.warning(self, "Uyarı", "Lütfen önce Google API anahtarı girin.")
+            return
+
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+            data = {
+                "contents": [{"parts": [{"text": "Test."}]}]
+            }
+            
+            response = requests.post(url, json=data, timeout=10)
+            
+            if response.status_code == 200:
+                QMessageBox.information(self, "Başarılı", "✅ Google Gemini bağlantısı başarılı!")
+            else:
+                QMessageBox.critical(self, "Hata", f"❌ Bağlantı başarısız!\nKod: {response.status_code}\n{response.text}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"❌ Bağlantı hatası: {str(e)}")
+
     def save_settings(self):
         key = self.api_key_input.text().strip()
         model = self.model_input.currentText().strip()
         base_url = self.base_url_input.text().strip()
+        provider = self.provider_input.currentText().strip()
 
         self.db.set_setting("openrouter_api_key", key)
         self.db.set_setting("openrouter_model", model)
         self.db.set_setting("openrouter_base_url", base_url)
+        self.db.set_setting("ai_provider", provider)
+        
+        # Save Gemini settings
+        self.db.set_setting("gemini_api_key", self.gemini_key_input.text().strip())
+        self.db.set_setting("gemini_model", self.gemini_model_input.currentText().strip())
 
         QMessageBox.information(self, "Başarılı", "Ayarlar kaydedildi.")
         self.accept()
@@ -2979,8 +3054,31 @@ class PDFSearchAppPyQt5(QMainWindow):
 
         self.setup_ui()
 
+        # Status Bar Setup
+        self.status_bar = self.statusBar()
+        self.model_status_label = QLabel("AI Model: -")
+        self.model_status_label.setStyleSheet("color: #333; font-weight: bold; margin-right: 10px;")
+        self.status_bar.addPermanentWidget(self.model_status_label)
+        
+        # Update status initial
+        self.update_ai_status()
+
         # Uygulama tamamen açıldıktan 500ms sonra yüklemeye başla
         self.scan_timer.start(500)
+
+    def update_ai_status(self):
+        """Update AI Status Bar"""
+        provider = self.db.get_setting("ai_provider") or "OpenRouter"
+        
+        if provider == "Google Gemini":
+            model = self.db.get_setting("gemini_model")
+        else:
+            model = self.db.get_setting("openrouter_model")
+            
+        if not model:
+            model = "Seçilmedi"
+            
+        self.model_status_label.setText(f"AI: {provider} ({model})")
 
     def start_delayed_loading(self):
         """Ağır yükleme işlemlerini başlat"""
@@ -3199,8 +3297,12 @@ class PDFSearchAppPyQt5(QMainWindow):
         
         # Kayıtlı Pozlar ve Analizler (YENİ SEKME)
         self.custom_analysis_tab = CustomAnalysisManager()
-        self.tab_widget.addTab(self.custom_analysis_tab, "🗂️ Kayıtlı Pozlar ve Analizler")
+        self.tab_widget.addTab(self.custom_analysis_tab, "Kayıtlı Pozlar ve Analizler")
 
+        # Tab: Quantity Takeoff (İmalat Metrajları)
+        self.takeoff_tab = QuantityTakeoffManager()
+        self.tab_widget.addTab(self.takeoff_tab, "Proje İmalat Metrajı")
+        
         # Proje değişikliği sinyalini bağla
         self.cost_tab.project_changed_signal.connect(self.on_project_changed)
 
