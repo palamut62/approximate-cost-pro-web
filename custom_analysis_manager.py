@@ -1,7 +1,8 @@
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QTableWidget, QTableWidgetItem, 
-                             QHeaderView, QListWidget, QListWidgetItem, 
-                             QSplitter, QMessageBox, QFrame)
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+                             QPushButton, QTableWidget, QTableWidgetItem,
+                             QHeaderView, QListWidget, QListWidgetItem,
+                             QSplitter, QMessageBox, QFrame, QMenu,
+                             QDialog, QTextEdit, QComboBox, QDialogButtonBox)
 from PyQt5.QtCore import Qt
 from database import DatabaseManager
 
@@ -14,6 +15,7 @@ class CustomAnalysisManager(QWidget):
         self.original_component_ids = [] # Veritabanındaki orijinal ID'leri tut
         self.is_loading = False  # Veri yüklenirken cellChanged sinyalini engelle
         self.has_unsaved_changes = False
+        self.parent_app = None  # Ana uygulamaya referans
         self.setup_ui()
         self.refresh_list()
 
@@ -67,7 +69,6 @@ class CustomAnalysisManager(QWidget):
         left_layout.addWidget(list_label)
         
         self.list_widget = QListWidget()
-        self.list_widget.setFocusPolicy(Qt.NoFocus)
         self.list_widget.setStyleSheet("""
             QListWidget {
                 border: 1px solid #CFD8DC;
@@ -90,6 +91,8 @@ class CustomAnalysisManager(QWidget):
             }
         """)
         self.list_widget.currentRowChanged.connect(self.on_poz_selected)
+        self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self.show_list_context_menu)
         left_layout.addWidget(self.list_widget)
         
         refresh_btn = QPushButton("🔄 Listeyi Yenile")
@@ -248,13 +251,31 @@ class CustomAnalysisManager(QWidget):
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(0, 5, 0, 0)
         
+        self.add_to_project_btn = QPushButton("💰 Projeye Ekle")
+        self.add_to_project_btn.setCursor(Qt.PointingHandCursor)
+        self.add_to_project_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FF9800;
+                color: white;
+                font-weight: bold;
+                padding: 10px 20px;
+                border-radius: 4px;
+                font-size: 10pt;
+            }
+            QPushButton:hover { background-color: #F57C00; }
+            QPushButton:disabled { background-color: #FFE0B2; color: #FFCC80; }
+        """)
+        self.add_to_project_btn.setEnabled(False)
+        self.add_to_project_btn.clicked.connect(self.add_to_project)
+        btn_layout.addWidget(self.add_to_project_btn)
+
         self.delete_btn = QPushButton("🗑️ Seçili Pozu Sil")
         self.delete_btn.setCursor(Qt.PointingHandCursor)
         self.delete_btn.setStyleSheet("""
             QPushButton {
-                background-color: #EF5350; 
-                color: white; 
-                font-weight: bold; 
+                background-color: #EF5350;
+                color: white;
+                font-weight: bold;
                 padding: 10px 20px;
                 border-radius: 4px;
                 font-size: 10pt;
@@ -264,7 +285,7 @@ class CustomAnalysisManager(QWidget):
         """)
         self.delete_btn.setEnabled(False)
         self.delete_btn.clicked.connect(self.delete_selected_poz)
-        
+
         btn_layout.addStretch()
         btn_layout.addWidget(self.delete_btn)
         
@@ -294,6 +315,7 @@ class CustomAnalysisManager(QWidget):
 
         self.detail_table.setRowCount(0)
         self.delete_btn.setEnabled(False)
+        self.add_to_project_btn.setEnabled(False)
         self.add_row_btn.setEnabled(False)
         self.delete_row_btn.setEnabled(False)
         self.clear_all_btn.setEnabled(False)
@@ -321,7 +343,9 @@ class CustomAnalysisManager(QWidget):
         item = self.list_widget.item(row)
         analysis = item.data(Qt.UserRole)
         self.current_analysis_id = analysis['id']
+        self.current_analysis_data = analysis  # Projeye eklemek için sakla
         self.delete_btn.setEnabled(True)
+        self.add_to_project_btn.setEnabled(True)
         self.add_row_btn.setEnabled(True)
         self.delete_row_btn.setEnabled(True)
         self.clear_all_btn.setEnabled(True)
@@ -566,3 +590,302 @@ class CustomAnalysisManager(QWidget):
             analysis = item.data(Qt.UserRole)
             analysis['total_price'] = new_total
             item.setData(Qt.UserRole, analysis)
+
+    def show_list_context_menu(self, position):
+        """Poz listesi için sağ tık menüsü"""
+        item = self.list_widget.itemAt(position)
+        if not item:
+            return
+
+        menu = QMenu()
+        add_to_project_action = menu.addAction("💰 Projeye Ekle")
+        menu.addSeparator()
+        show_details_action = menu.addAction("🤖 AI İsteği ve Puanı Göster")
+        menu.addSeparator()
+        delete_action = menu.addAction("🗑️ Pozu Sil")
+
+        action = menu.exec_(self.list_widget.viewport().mapToGlobal(position))
+
+        if action == add_to_project_action:
+            self.add_to_project()
+        elif action == show_details_action:
+            self.show_ai_details()
+        elif action == delete_action:
+            self.delete_selected_poz()
+
+    def add_to_project(self):
+        """Seçili pozu aktif projeye ekle"""
+        if not self.current_analysis_id or not hasattr(self, 'current_analysis_data'):
+            QMessageBox.warning(self, "Uyarı", "Lütfen önce bir poz seçin.")
+            return
+
+        if not self.parent_app or not hasattr(self.parent_app, 'cost_tab'):
+            QMessageBox.warning(self, "Uyarı", "Ana uygulama bağlantısı bulunamadı.")
+            return
+
+        analysis = self.current_analysis_data
+        poz_no = analysis.get('poz_no', '')
+        name = analysis.get('name', '')
+        unit = analysis.get('unit', 'Adet')
+        total_price = analysis.get('total_price', 0.0)
+
+        # cost_tab'a ekle
+        success = self.parent_app.cost_tab.add_item_from_external(
+            poz_no,
+            name,
+            unit,
+            total_price
+        )
+
+        if success:
+            QMessageBox.information(self, "Başarılı", f"'{poz_no}' pozu projeye eklendi!")
+        else:
+            QMessageBox.warning(self, "Uyarı", "Poz projeye eklenemedi. Lütfen tekrar deneyin.")
+
+    def format_ai_text(self, text, is_explanation=False):
+        """AI metnini gelişmiş HTML formatına dönüştür"""
+        import re
+
+        if not text:
+            if is_explanation:
+                return "<i style='color: #999;'>AI açıklaması bulunamadı.</i>"
+            return "<i style='color: #999;'>Kayıt bulunamadı.</i>"
+
+        if not is_explanation:
+            # Basit formatlama (prompt için)
+            return text.replace('\n', '<br>')
+
+        # Gelişmiş formatlama (açıklama için)
+        lines = text.split('\n')
+        formatted_lines = []
+        in_list = False
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                if in_list:
+                    formatted_lines.append('</ul>')
+                    in_list = False
+                formatted_lines.append('<br>')
+                continue
+
+            # Madde işareti ile başlayan satırlar (-, *, •)
+            if stripped.startswith(('-', '*', '•')) and len(stripped) > 1:
+                if not in_list:
+                    formatted_lines.append('<ul style="margin: 5px 0; padding-left: 20px;">')
+                    in_list = True
+                item_text = stripped[1:].strip()
+                item_text = self._format_line_content(item_text)
+                formatted_lines.append(f'<li style="margin: 3px 0;">{item_text}</li>')
+            # Numaralı liste (1., 2., vb.)
+            elif re.match(r'^\d+[\.\)]\s*', stripped):
+                if not in_list:
+                    formatted_lines.append('<ol style="margin: 5px 0; padding-left: 20px;">')
+                    in_list = True
+                item_text = re.sub(r'^\d+[\.\)]\s*', '', stripped)
+                item_text = self._format_line_content(item_text)
+                formatted_lines.append(f'<li style="margin: 3px 0;">{item_text}</li>')
+            # Başlık satırları (: ile biten)
+            elif stripped.endswith(':') and len(stripped) < 60:
+                if in_list:
+                    formatted_lines.append('</ul>' if '</li>' in formatted_lines[-1] else '</ol>')
+                    in_list = False
+                formatted_lines.append(f'<p style="margin: 10px 0 5px 0;"><b style="color: #1565C0; font-size: 10.5pt;">{stripped}</b></p>')
+            else:
+                if in_list:
+                    formatted_lines.append('</ul>' if '<ul' in ''.join(formatted_lines[-5:]) else '</ol>')
+                    in_list = False
+                formatted_line = self._format_line_content(stripped)
+                formatted_lines.append(f'<p style="margin: 4px 0;">{formatted_line}</p>')
+
+        if in_list:
+            formatted_lines.append('</ul>')
+
+        return ''.join(formatted_lines)
+
+    def _format_line_content(self, text):
+        """Satır içeriğini formatla - sayılar, birimler, formüller"""
+        import re
+
+        # Formülleri vurgula: L×B×H = 5×3×2 = 30 m³
+        text = re.sub(
+            r'([A-Za-zğüşıöçĞÜŞİÖÇ\d\.]+)\s*[×x\*]\s*([A-Za-zğüşıöçĞÜŞİÖÇ\d\.]+)(\s*[×x\*]\s*[A-Za-zğüşıöçĞÜŞİÖÇ\d\.]+)*',
+            lambda m: f'<code style="background: #E3F2FD; padding: 2px 4px; border-radius: 3px; color: #1565C0;">{m.group(0).replace("*", "×").replace("x", "×")}</code>',
+            text
+        )
+
+        # Eşitlik sonuçlarını vurgula: = 30
+        text = re.sub(
+            r'=\s*(\d+\.?\d*)',
+            r'= <b style="color: #2E7D32;">\1</b>',
+            text
+        )
+
+        # Sayı + birim kombinasyonlarını vurgula
+        text = re.sub(
+            r'(\d+\.?\d*)\s*(m[²³]|m2|m3|kg|ton|adet|sa|TL|cm|mm|lt|litre)',
+            r'<span style="color: #D84315; font-weight: 500;">\1 \2</span>',
+            text,
+            flags=re.IGNORECASE
+        )
+
+        # Yüzde değerlerini vurgula
+        text = re.sub(
+            r'%\s*(\d+\.?\d*)',
+            r'<span style="color: #7B1FA2; font-weight: 500;">%\1</span>',
+            text
+        )
+
+        # Parantez içi açıklamaları italik yap
+        text = re.sub(
+            r'\(([^)]+)\)',
+            r'<i style="color: #666;">(\1)</i>',
+            text
+        )
+
+        return text
+
+    def show_ai_details(self):
+        """AI ile oluşturulan analiz için prompt ve puanlama detaylarını göster"""
+        current_row = self.list_widget.currentRow()
+        if current_row < 0:
+            return
+
+        item = self.list_widget.item(current_row)
+        analysis = item.data(Qt.UserRole)
+        analysis_id = analysis['id']
+
+        # Veritabanından AI detaylarını al
+        details = self.db.get_analysis_details(analysis_id)
+
+        if not details:
+            QMessageBox.information(self, "Bilgi", "Bu analiz için AI detayları bulunamadı.")
+            return
+
+        user_prompt = details.get('user_prompt')
+        ai_explanation = details.get('ai_explanation')
+        score = details.get('score')
+
+        # Varsayılan mesajlar
+        default_prompt = "Bu poz manuel oluşturulmuş veya eski sürümde AI ile oluşturulmuş olabilir.\n\nYeni AI analizlerinde prompt otomatik kaydedilir."
+        default_explanation = "Bu poz eski sürümde oluşturulmuş olabilir veya AI yanıtında 'explanation' alanı yoktu.\n\nYeni analizlerde bu bilgi otomatik kaydedilir."
+
+        # Dialog oluştur
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"🤖 AI Detayları - {analysis['poz_no']}")
+        dialog.setMinimumSize(700, 550)
+
+        layout = QVBoxLayout(dialog)
+
+        # Splitter (Üst: Prompt, Alt: AI Açıklama)
+        splitter = QSplitter(Qt.Vertical)
+
+        # Üst Panel: Kullanıcı Promptu
+        prompt_widget = QWidget()
+        prompt_layout = QVBoxLayout(prompt_widget)
+        prompt_layout.setContentsMargins(0, 0, 0, 5)
+        prompt_layout.addWidget(QLabel("<b style='font-size: 11pt;'>👤 Kullanıcı İsteği (Prompt):</b>"))
+
+        prompt_text = QTextEdit()
+        prompt_text.setReadOnly(True)
+        formatted_prompt = self.format_ai_text(user_prompt or default_prompt, is_explanation=False)
+        prompt_text.setHtml(f"""
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; font-size: 10pt; line-height: 1.5; color: #333;">
+                {formatted_prompt}
+            </div>
+        """)
+        prompt_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #FFF8E1;
+                border: 1px solid #FFE082;
+                border-radius: 6px;
+                padding: 10px;
+            }
+        """)
+        prompt_layout.addWidget(prompt_text)
+        splitter.addWidget(prompt_widget)
+
+        # Alt Panel: AI Açıklaması
+        explanation_widget = QWidget()
+        explanation_layout = QVBoxLayout(explanation_widget)
+        explanation_layout.setContentsMargins(0, 5, 0, 0)
+        explanation_layout.addWidget(QLabel("<b style='font-size: 11pt;'>🤖 AI Hesaplama Mantığı & Açıklama:</b>"))
+
+        explanation_text = QTextEdit()
+        explanation_text.setReadOnly(True)
+        formatted_explanation = self.format_ai_text(ai_explanation or default_explanation, is_explanation=True)
+        explanation_text.setHtml(f"""
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; font-size: 10pt; line-height: 1.6; color: #333;">
+                {formatted_explanation}
+            </div>
+        """)
+        explanation_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #E8F5E9;
+                border: 1px solid #A5D6A7;
+                border-radius: 6px;
+                padding: 10px;
+            }
+        """)
+        explanation_layout.addWidget(explanation_text)
+        splitter.addWidget(explanation_widget)
+
+        layout.addWidget(splitter)
+
+        # Puanlama Bölümü
+        score_layout = QHBoxLayout()
+        score_layout.addWidget(QLabel("<b>⭐ AI Cevap Puanı:</b>"))
+
+        score_combo = QComboBox()
+        score_combo.addItems([
+            "Seçiniz...",
+            "⭐ 1 - Kötü (Kullanılamaz)",
+            "⭐⭐ 2 - Zayıf (Çok düzeltme gerekli)",
+            "⭐⭐⭐ 3 - Orta (Düzeltmelerle kullanılabilir)",
+            "⭐⭐⭐⭐ 4 - İyi (Az düzeltme gerekli)",
+            "⭐⭐⭐⭐⭐ 5 - Mükemmel (Doğrudan kullanılabilir)"
+        ])
+
+        # Mevcut puanı yükle
+        if score is not None:
+            try:
+                score_val = int(score)
+                if 1 <= score_val <= 5:
+                    score_combo.setCurrentIndex(score_val)
+            except:
+                pass
+
+        score_layout.addWidget(score_combo)
+
+        save_score_btn = QPushButton("💾 Puanı Kaydet")
+        save_score_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FFC107;
+                color: black;
+                font-weight: bold;
+                padding: 8px 16px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #FFB300; }
+        """)
+        score_layout.addWidget(save_score_btn)
+
+        layout.addLayout(score_layout)
+
+        def save_score():
+            idx = score_combo.currentIndex()
+            if idx == 0:
+                QMessageBox.warning(dialog, "Uyarı", "Lütfen bir puan seçin.")
+                return
+
+            self.db.update_analysis_score(analysis_id, idx)
+            QMessageBox.information(dialog, "Başarılı", "Puan kaydedildi.")
+
+        save_score_btn.clicked.connect(save_score)
+
+        # Kapat butonu
+        btn_box = QDialogButtonBox(QDialogButtonBox.Close)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
+        dialog.exec_()

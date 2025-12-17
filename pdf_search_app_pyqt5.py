@@ -95,19 +95,38 @@ class PDFSearchEngine:
             with open(self.cache_file, 'r', encoding='utf-8') as f:
                 cache_data = json.load(f)
 
-            # Cache yaşını kontrol et (24 saatten eski ise geçersiz)
-            cache_time = datetime.fromisoformat(cache_data.get('timestamp', '2000-01-01'))
-            age_hours = (datetime.now() - cache_time).total_seconds() / 3600
-
-            if age_hours > 24:
-                print("Cache çok eski, yeniden yüklenecek")
-                return False
-
             # Dosya hash'lerini kontrol et
             file_hashes = cache_data.get('file_hashes', {})
             invalid_files = []
+            changed_files = []
+
+            # PDF klasöründeki mevcut dosyaları al
+            pdf_folder = Path(__file__).parent / "PDF"
+            current_pdf_files = set()
+            if pdf_folder.exists():
+                current_pdf_files = {f.name for f in pdf_folder.glob("*.pdf")}
+
+            # Cache'deki dosyaları kontrol et
+            cached_files = set(file_hashes.keys())
+
+            # Yeni eklenen dosyaları bul
+            new_files = current_pdf_files - cached_files
+            if new_files:
+                print(f"Yeni PDF dosyaları bulundu: {new_files}")
+                return False  # Yeni dosyalar var, cache geçersiz
+
+            # Silinen dosyaları bul
+            deleted_files = cached_files - current_pdf_files
+            if deleted_files:
+                print(f"Silinen PDF dosyaları: {deleted_files}")
+                # Silinen dosyaları cache'den çıkar, ama diğerlerini yükle
+                for df in deleted_files:
+                    invalid_files.append(df)
 
             for file_name, cached_hash in file_hashes.items():
+                if file_name in deleted_files:
+                    continue
+
                 # Dosya yolunu bulmaya çalış
                 possible_paths = [
                     Path(__file__).parent / "PDF" / file_name,
@@ -119,7 +138,7 @@ class PDFSearchEngine:
                     if path.exists():
                         current_hash = self.get_file_hash(path)
                         if current_hash != cached_hash:
-                            invalid_files.append(file_name)
+                            changed_files.append(file_name)
                         file_found = True
                         break
 
@@ -127,15 +146,33 @@ class PDFSearchEngine:
                     invalid_files.append(file_name)
 
             # Dosyalar değişmişse cache geçersiz
-            if invalid_files:
-                print(f"Değişen dosyalar var, yeniden yüklenecek: {invalid_files}")
+            if changed_files:
+                print(f"Değişen dosyalar var, yeniden yüklenecek: {changed_files}")
                 return False
 
-            # Cache geçerli, verileri yükle
+            # Cache geçerli, verileri yükle (silinen dosyaları hariç tut)
             self.pdf_data = cache_data.get('pdf_data', {})
             self.loaded_files = cache_data.get('loaded_files', [])
 
-            print(f"Cache'den yüklendi: {len(self.loaded_files)} dosya")
+            # Silinen dosyaları çıkar
+            for df in deleted_files:
+                if df in self.pdf_data:
+                    del self.pdf_data[df]
+                if df in self.loaded_files:
+                    self.loaded_files.remove(df)
+
+            # Cache timestamp bilgisi
+            cache_time = cache_data.get('timestamp', '')
+            if cache_time:
+                try:
+                    ct = datetime.fromisoformat(cache_time)
+                    self.cache_timestamp = ct.strftime("%d.%m.%Y %H:%M")
+                except:
+                    self.cache_timestamp = "Bilinmiyor"
+            else:
+                self.cache_timestamp = "Bilinmiyor"
+
+            print(f"Cache'den yüklendi: {len(self.loaded_files)} dosya (Son güncelleme: {self.cache_timestamp})")
             return True
 
         except Exception as e:
@@ -2623,7 +2660,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Ayarlar")
-        self.setMinimumSize(750, 550)
+        self.setMinimumSize(900, 480)
         from database import DatabaseManager
         self.db = DatabaseManager()
         self.base_dir = Path(__file__).resolve().parent
@@ -2894,6 +2931,144 @@ class SettingsDialog(QDialog):
         app_layout.addStretch()
         self.tabs.addTab(app_tab, "⚙️ Uygulama Ayarları")
 
+        # --- Tab 4: Nakliye Ayarları (KGM 2025) ---
+        nakliye_tab = QWidget()
+        nakliye_layout = QVBoxLayout(nakliye_tab)
+
+        # Bilgi başlığı
+        nakliye_info = QFrame()
+        nakliye_info.setStyleSheet("background-color: #E3F2FD; border-radius: 5px; padding: 10px;")
+        nakliye_info_layout = QVBoxLayout(nakliye_info)
+        nakliye_title = QLabel("🚛 KGM 2025 Nakliye Hesabı Parametreleri")
+        nakliye_title.setStyleSheet("font-weight: bold; font-size: 11pt; color: #1565C0;")
+        nakliye_info_layout.addWidget(nakliye_title)
+        nakliye_desc = QLabel("Bu parametreler, AI analiz oluştururken nakliye hesabında kullanılır.\nKarayolları Genel Müdürlüğü 2025 Birim Fiyat formülleri esas alınmıştır.")
+        nakliye_desc.setStyleSheet("color: #546E7A; font-size: 9pt;")
+        nakliye_desc.setWordWrap(True)
+        nakliye_info_layout.addWidget(nakliye_desc)
+        nakliye_layout.addWidget(nakliye_info)
+
+        # Nakliye Modu Seçimi
+        mode_group = QGroupBox("📋 Nakliye Hesaplama Modu")
+        mode_layout = QVBoxLayout()
+
+        self.nakliye_mode_combo = QComboBox()
+        self.nakliye_mode_combo.addItems([
+            "AI'ya Bırak (Varsayılan değerler kullanılır)",
+            "Manuel Değerler Kullan (Aşağıdaki ayarları kullan)"
+        ])
+        current_mode = self.db.get_setting("nakliye_mode") or "AI'ya Bırak (Varsayılan değerler kullanılır)"
+        self.nakliye_mode_combo.setCurrentText(current_mode)
+        self.nakliye_mode_combo.currentIndexChanged.connect(self.toggle_nakliye_fields)
+        mode_layout.addWidget(self.nakliye_mode_combo)
+
+        mode_group.setLayout(mode_layout)
+        nakliye_layout.addWidget(mode_group)
+
+        # Temel Parametreler
+        params_group = QGroupBox("📐 Temel Parametreler")
+        params_form = QFormLayout()
+
+        # Ortalama Taşıma Mesafesi (M)
+        self.nakliye_mesafe_input = QSpinBox()
+        self.nakliye_mesafe_input.setRange(1, 100000)
+        self.nakliye_mesafe_input.setSuffix(" m")
+        self.nakliye_mesafe_input.setValue(int(self.db.get_setting("nakliye_mesafe") or 20000))
+        params_form.addRow("Ortalama Taşıma Mesafesi (M):", self.nakliye_mesafe_input)
+
+        # Taşıma Katsayısı (K) - Motorlu araç poz 02.017
+        self.nakliye_k_input = QDoubleSpinBox()
+        self.nakliye_k_input.setRange(0.1, 10.0)
+        self.nakliye_k_input.setDecimals(2)
+        self.nakliye_k_input.setValue(float(self.db.get_setting("nakliye_k") or 1.0))
+        params_form.addRow("Taşıma Katsayısı (K):", self.nakliye_k_input)
+
+        # A Katsayısı (Taşıma Şartları)
+        self.nakliye_a_input = QDoubleSpinBox()
+        self.nakliye_a_input.setRange(0.1, 5.0)
+        self.nakliye_a_input.setDecimals(2)
+        self.nakliye_a_input.setValue(float(self.db.get_setting("nakliye_a") or 1.0))
+        a_info = QLabel("(Zor şartlar: 1-3, Kolay şartlar: <1)")
+        a_info.setStyleSheet("color: #666; font-size: 8pt;")
+        params_form.addRow("A Katsayısı (Taşıma Şartları):", self.nakliye_a_input)
+        params_form.addRow("", a_info)
+
+        params_group.setLayout(params_form)
+        nakliye_layout.addWidget(params_group)
+
+        # Malzeme Yoğunlukları
+        yogunluk_group = QGroupBox("⚖️ Malzeme Yoğunlukları (Y) - ton/m³")
+        yogunluk_form = QFormLayout()
+
+        # Kum, çakıl, stabilize, kırmataş
+        self.yogunluk_kum_input = QDoubleSpinBox()
+        self.yogunluk_kum_input.setRange(0.5, 5.0)
+        self.yogunluk_kum_input.setDecimals(2)
+        self.yogunluk_kum_input.setSuffix(" ton/m³")
+        self.yogunluk_kum_input.setValue(float(self.db.get_setting("yogunluk_kum") or 1.60))
+        yogunluk_form.addRow("Kum, Çakıl, Stabilize, Kırmataş:", self.yogunluk_kum_input)
+
+        # Anroşman, moloz taş
+        self.yogunluk_moloz_input = QDoubleSpinBox()
+        self.yogunluk_moloz_input.setRange(0.5, 5.0)
+        self.yogunluk_moloz_input.setDecimals(2)
+        self.yogunluk_moloz_input.setSuffix(" ton/m³")
+        self.yogunluk_moloz_input.setValue(float(self.db.get_setting("yogunluk_moloz") or 1.80))
+        yogunluk_form.addRow("Anroşman, Moloz Taş:", self.yogunluk_moloz_input)
+
+        # Beton, prefabrik
+        self.yogunluk_beton_input = QDoubleSpinBox()
+        self.yogunluk_beton_input.setRange(0.5, 5.0)
+        self.yogunluk_beton_input.setDecimals(2)
+        self.yogunluk_beton_input.setSuffix(" ton/m³")
+        self.yogunluk_beton_input.setValue(float(self.db.get_setting("yogunluk_beton") or 2.40))
+        yogunluk_form.addRow("Beton, Prefabrik Beton:", self.yogunluk_beton_input)
+
+        # Çimento
+        self.yogunluk_cimento_input = QDoubleSpinBox()
+        self.yogunluk_cimento_input.setRange(0.5, 5.0)
+        self.yogunluk_cimento_input.setDecimals(2)
+        self.yogunluk_cimento_input.setSuffix(" ton/m³")
+        self.yogunluk_cimento_input.setValue(float(self.db.get_setting("yogunluk_cimento") or 1.50))
+        yogunluk_form.addRow("Çimento:", self.yogunluk_cimento_input)
+
+        # Demir
+        self.yogunluk_demir_input = QDoubleSpinBox()
+        self.yogunluk_demir_input.setRange(0.5, 10.0)
+        self.yogunluk_demir_input.setDecimals(2)
+        self.yogunluk_demir_input.setSuffix(" ton/m³")
+        self.yogunluk_demir_input.setValue(float(self.db.get_setting("yogunluk_demir") or 7.85))
+        yogunluk_form.addRow("Betonarme Demiri:", self.yogunluk_demir_input)
+
+        yogunluk_group.setLayout(yogunluk_form)
+        nakliye_layout.addWidget(yogunluk_group)
+
+        # KGM Formül Bilgisi
+        formula_group = QGroupBox("📖 KGM Nakliye Formülleri (Bilgi)")
+        formula_layout = QVBoxLayout()
+
+        formula_text = QLabel("""
+<b>07.005/K - 10.000 m'ye kadar:</b><br>
+<code>F = 1,25 × 0,00017 × K × M × Y × A</code> (m³ için)<br>
+<code>F = 1,25 × 0,00017 × K × M × A</code> (ton için)<br><br>
+
+<b>07.006/K - 10.000 m'den fazla:</b><br>
+<code>F = 1,25 × K × (0,0007 × M + 0,01) × Y × A</code> (m³ için)<br>
+<code>F = 1,25 × K × (0,0007 × M + 0,01) × A</code> (ton için)
+        """)
+        formula_text.setStyleSheet("background-color: #FFF8E1; padding: 10px; border-radius: 4px; font-size: 9pt;")
+        formula_text.setWordWrap(True)
+        formula_layout.addWidget(formula_text)
+
+        formula_group.setLayout(formula_layout)
+        nakliye_layout.addWidget(formula_group)
+
+        nakliye_layout.addStretch()
+        self.tabs.addTab(nakliye_tab, "🚛 Nakliye Ayarları")
+
+        # Toggle fields based on mode
+        self.toggle_nakliye_fields()
+
         layout.addWidget(self.tabs)
 
         # Kaydet butonu (altta)
@@ -3124,8 +3299,32 @@ class SettingsDialog(QDialog):
         self.db.set_setting("confirm_on_exit", "true" if self.confirm_exit_check.isChecked() else "false")
         self.db.set_setting("confirm_on_delete", "true" if self.confirm_delete_check.isChecked() else "false")
 
+        # Save Nakliye settings (KGM 2025)
+        self.db.set_setting("nakliye_mode", self.nakliye_mode_combo.currentText())
+        self.db.set_setting("nakliye_mesafe", str(self.nakliye_mesafe_input.value()))
+        self.db.set_setting("nakliye_k", str(self.nakliye_k_input.value()))
+        self.db.set_setting("nakliye_a", str(self.nakliye_a_input.value()))
+        self.db.set_setting("yogunluk_kum", str(self.yogunluk_kum_input.value()))
+        self.db.set_setting("yogunluk_moloz", str(self.yogunluk_moloz_input.value()))
+        self.db.set_setting("yogunluk_beton", str(self.yogunluk_beton_input.value()))
+        self.db.set_setting("yogunluk_cimento", str(self.yogunluk_cimento_input.value()))
+        self.db.set_setting("yogunluk_demir", str(self.yogunluk_demir_input.value()))
+
         QMessageBox.information(self, "Başarılı", "Ayarlar kaydedildi.")
         self.accept()
+
+    def toggle_nakliye_fields(self):
+        """Nakliye modu değiştiğinde alanları aktif/pasif yap"""
+        is_manual = self.nakliye_mode_combo.currentIndex() == 1
+
+        self.nakliye_mesafe_input.setEnabled(is_manual)
+        self.nakliye_k_input.setEnabled(is_manual)
+        self.nakliye_a_input.setEnabled(is_manual)
+        self.yogunluk_kum_input.setEnabled(is_manual)
+        self.yogunluk_moloz_input.setEnabled(is_manual)
+        self.yogunluk_beton_input.setEnabled(is_manual)
+        self.yogunluk_cimento_input.setEnabled(is_manual)
+        self.yogunluk_demir_input.setEnabled(is_manual)
 
 class PDFSearchAppPyQt5(QMainWindow):
     def __init__(self):
@@ -3562,6 +3761,7 @@ class PDFSearchAppPyQt5(QMainWindow):
         
         # Kayıtlı Pozlar ve Analizler (YENİ SEKME)
         self.custom_analysis_tab = CustomAnalysisManager()
+        self.custom_analysis_tab.parent_app = self  # Projeye ekleme için referans
         self.tab_widget.addTab(self.custom_analysis_tab, "💾 Kayıtlı Pozlar ve Analizler")
 
         # Tab: Quantity Takeoff (İmalat Metrajları)
@@ -3905,6 +4105,11 @@ class PDFSearchAppPyQt5(QMainWindow):
         """Loading tamamlandı"""
         self.hide_loading()
         total_files = len(self.search_engine.loaded_files)
+        # Cache'e kaydet
+        if self.search_engine.save_cache():
+            self.file_label.setText(f"✅ {total_files} PDF yüklendi ve cache'e kaydedildi")
+        else:
+            self.file_label.setText(f"✅ {total_files} PDF yüklendi")
         self.list_loaded_pdfs_on_label()
 
     def loading_error(self, error_msg):
@@ -3930,15 +4135,22 @@ class PDFSearchAppPyQt5(QMainWindow):
         """Yüklü PDF dosyalarını etiket üzerinde listele"""
         try:
             if self.search_engine.loaded_files:
-                names = ", ".join(self.search_engine.loaded_files)
-                self.file_label.setText(f"Yüklü PDF'ler: {names}")
+                file_count = len(self.search_engine.loaded_files)
+                names = ", ".join(self.search_engine.loaded_files[:5])  # İlk 5 dosya
+                if file_count > 5:
+                    names += f" ... (+{file_count - 5} dosya daha)"
+                cache_time = getattr(self.search_engine, 'cache_timestamp', None)
+                if cache_time:
+                    self.file_label.setText(f"📂 {file_count} PDF yüklü | {names}")
+                else:
+                    self.file_label.setText(f"📂 {file_count} PDF yüklü | {names}")
             else:
                 self.file_label.setText("Yüklenen dosya yok")
         except Exception:
             pass
 
     def load_pdfs_with_cache(self):
-        """CSV dosyalarını yükle"""
+        """PDF dosyalarını cache'den veya yeniden yükle"""
         try:
             # CSV dosyalarını yükle
             csv_count = len(self.csv_manager.poz_data)
@@ -3948,15 +4160,18 @@ class PDFSearchAppPyQt5(QMainWindow):
                 QTimer.singleShot(1000, self.check_file_changes)
                 return
 
-            # CSV bulunamazsa PDF'den cache yükle
+            # PDF'den cache yükle
             if self.search_engine.load_cache():
-                self.file_label.setText(f"Cache'den yüklendi: {len(self.search_engine.loaded_files)} PDF")
+                file_count = len(self.search_engine.loaded_files)
+                cache_time = getattr(self.search_engine, 'cache_timestamp', 'Bilinmiyor')
+                self.file_label.setText(f"✅ Cache'den yüklendi: {file_count} PDF (Son güncelleme: {cache_time})")
                 self.list_loaded_pdfs_on_label()
                 # Dosya değişikliği kontrolü
                 QTimer.singleShot(1000, self.check_file_changes)
                 return
 
             # Cache başarısızsa normal yükleme yap
+            self.file_label.setText("📂 PDF klasörü taranıyor...")
             self.scan_internal_pdf_folder()
             # Dosya değişikliği kontrolü
             QTimer.singleShot(2000, self.check_file_changes)

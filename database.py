@@ -169,6 +169,22 @@ class DatabaseManager:
         except:
             pass
 
+        # Migration: Add score and ai_explanation to custom_analyses if not exists
+        try:
+            cursor.execute('ALTER TABLE custom_analyses ADD COLUMN score INTEGER DEFAULT 0')
+        except:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE custom_analyses ADD COLUMN ai_explanation TEXT')
+        except:
+            pass
+
+        try:
+            cursor.execute('ALTER TABLE custom_analyses ADD COLUMN user_prompt TEXT')
+        except:
+            pass
+
         conn.commit()
         conn.close()
 
@@ -352,6 +368,18 @@ class DatabaseManager:
         conn.close()
         return results
 
+    def get_analysis_by_poz_no(self, poz_no):
+        """Poz numarasına göre analiz getir"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM custom_analyses WHERE poz_no = ?', (poz_no,))
+        columns = [description[0] for description in cursor.description]
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return dict(zip(columns, row))
+        return None
+
     def get_analysis_components(self, analysis_id):
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -439,6 +467,34 @@ class DatabaseManager:
         conn.commit()
         conn.close()
         return total_with_overhead
+
+    def update_analysis_score(self, analysis_id, score):
+        """Analiz puanını güncelle"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE custom_analyses SET score = ? WHERE id = ?', (score, analysis_id))
+        conn.commit()
+        conn.close()
+
+    def update_analysis_ai_data(self, analysis_id, ai_explanation, user_prompt):
+        """Analiz AI açıklaması ve kullanıcı promptunu güncelle"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE custom_analyses SET ai_explanation = ?, user_prompt = ? WHERE id = ?',
+                       (ai_explanation, user_prompt, analysis_id))
+        conn.commit()
+        conn.close()
+
+    def get_analysis_details(self, analysis_id):
+        """Analiz detaylarını getir (score, ai_explanation, user_prompt dahil)"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT score, ai_explanation, user_prompt FROM custom_analyses WHERE id = ?', (analysis_id,))
+        result = cursor.fetchone()
+        conn.close()
+        if result:
+            return {'score': result[0], 'ai_explanation': result[1], 'user_prompt': result[2]}
+        return None
 
     # --- Settings Methods ---
     def get_setting(self, key):

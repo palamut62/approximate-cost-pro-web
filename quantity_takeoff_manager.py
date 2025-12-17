@@ -167,53 +167,67 @@ class AITakeoffThread(QThread):
         - "explanation" alanı ZORUNLU ve detaylı olmalı
         """
 
+        gemini_error = None
+        openrouter_error = None
+
         if self.provider == "Google Gemini":
-            # Primary: Gemini
+            # Birincil: Gemini
             if self.gemini_key:
                 try:
                     self.status_update.emit("🤖 Gemini ile hesaplanıyor...")
                     self.call_gemini(prompt)
-                    return
+                    return  # Başarılı, çık
                 except Exception as e:
-                    error_msg = str(e)
-                    print(f"Gemini Error: {error_msg}")
-                    
-                    if "503" in error_msg:
+                    gemini_error = str(e)
+                    if "503" in gemini_error:
                         self.status_update.emit("⚠️ Gemini servisi yoğun, OpenRouter deneniyor...")
                     else:
-                        self.status_update.emit(f"⚠️ Gemini hatası ({error_msg[:30]}...), OpenRouter deneniyor...")
-                    pass
+                        self.status_update.emit("⚠️ Gemini hatası, OpenRouter deneniyor...")
             else:
-                 self.status_update.emit("⚠️ Gemini anahtarı yok, OpenRouter kullanılıyor...")
-                 
-            # Fallback/Default Logic (OpenRouter)
-            try:
-                self.call_openrouter(prompt)
-            except Exception as e:
-                self.finished.emit({}, "", f"Tüm denemeler başarısız.\n{str(e)}")
-        
-        else:
-            # Primary: OpenRouter (Default)
-            try:
-                self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
-                if not self.api_key:
-                    raise Exception("OpenRouter API Anahtarı eksik!")
-                self.call_openrouter(prompt)
-                return
+                gemini_error = "Gemini API anahtarı tanımlı değil"
+                self.status_update.emit("⚠️ Gemini anahtarı yok, OpenRouter kullanılıyor...")
 
-            except Exception as e:
-                print(f"OpenRouter Error: {e}")
-                
-                # Failover to Gemini
-                if self.gemini_key:
-                    try:
-                        self.status_update.emit("⚠️ OpenRouter hatası, Gemini deneniyor...")
-                        self.call_gemini(prompt)
-                        return
-                    except Exception as gemini_e:
-                        self.finished.emit({}, "", f"Tüm denemeler başarısız.\nOpenRouter: {str(e)}\nGemini: {str(gemini_e)}")
-                else:
-                    self.finished.emit({}, "", f"İşlem Hatası (OpenRouter): {str(e)}\nYedek Gemini anahtarı tanımlı değil.")
+            # Yedek: OpenRouter
+            if self.api_key:
+                try:
+                    self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
+                    self.call_openrouter(prompt)
+                    return  # Başarılı, çık
+                except Exception as e:
+                    openrouter_error = str(e)
+            else:
+                openrouter_error = "OpenRouter API anahtarı tanımlı değil"
+
+            # Her ikisi de başarısız
+            self.finished.emit({}, "", f"Tüm kaynaklar başarısız.\nGemini: {gemini_error}\nOpenRouter: {openrouter_error}")
+
+        else:
+            # Birincil: OpenRouter
+            if self.api_key:
+                try:
+                    self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
+                    self.call_openrouter(prompt)
+                    return  # Başarılı, çık
+                except Exception as e:
+                    openrouter_error = str(e)
+                    self.status_update.emit("⚠️ OpenRouter hatası, Gemini deneniyor...")
+            else:
+                openrouter_error = "OpenRouter API anahtarı tanımlı değil"
+                self.status_update.emit("⚠️ OpenRouter anahtarı yok, Gemini kullanılıyor...")
+
+            # Yedek: Gemini
+            if self.gemini_key:
+                try:
+                    self.status_update.emit("🤖 Gemini ile hesaplanıyor...")
+                    self.call_gemini(prompt)
+                    return  # Başarılı, çık
+                except Exception as e:
+                    gemini_error = str(e)
+            else:
+                gemini_error = "Gemini API anahtarı tanımlı değil"
+
+            # Her ikisi de başarısız
+            self.finished.emit({}, "", f"Tüm kaynaklar başarısız.\nOpenRouter: {openrouter_error}\nGemini: {gemini_error}")
 
     def call_openrouter(self, prompt):
         headers = {
@@ -222,7 +236,7 @@ class AITakeoffThread(QThread):
             "HTTP-Referer": "https://yaklasikmaliyetpro.com",
             "X-Title": "Yaklasik Maliyet Pro"
         }
-        
+
         data = {
             "model": self.model,
             "messages": [
@@ -235,11 +249,26 @@ class AITakeoffThread(QThread):
         }
 
         response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=60)
-        
+
         if response.status_code != 200:
-            raise Exception(f"API Hatası ({response.status_code}): {response.text}")
-            
-        raw_content = response.json()['choices'][0]['message']['content']
+            raise Exception(f"API Hatası ({response.status_code}): {response.text[:500]}")
+
+        # Boş yanıt kontrolü
+        if not response.text or not response.text.strip():
+            raise Exception("API boş yanıt döndürdü")
+
+        try:
+            result = response.json()
+        except Exception as e:
+            raise Exception(f"JSON parse hatası: {str(e)}")
+
+        if 'choices' not in result or not result['choices']:
+            raise Exception(f"Geçersiz API yanıtı: {str(result)[:300]}")
+
+        raw_content = result['choices'][0]['message']['content']
+        if not raw_content:
+            raise Exception("API içerik boş döndürdü")
+
         self.process_response(raw_content)
 
     def call_gemini(self, prompt):
@@ -316,6 +345,23 @@ class AITakeoffThread(QThread):
         corrected = re.sub(r',\s*}', '}', content)
         corrected = re.sub(r',\s*]', ']', corrected)
 
+        # Eksik virgül ekleme: "value" "key" -> "value", "key"
+        # Bu pattern iki string arasında eksik virgülü yakalar
+        corrected = re.sub(r'"\s*\n\s*"', '",\n"', corrected)
+        corrected = re.sub(r'"\s+"', '", "', corrected)
+
+        # Eksik virgül: } { veya ] [ arasında
+        corrected = re.sub(r'}\s*{', '}, {', corrected)
+        corrected = re.sub(r']\s*\[', '], [', corrected)
+
+        # Eksik virgül: } "key" veya ] "value" arasında
+        corrected = re.sub(r'}\s*"', '}, "', corrected)
+        corrected = re.sub(r']\s*"', '], "', corrected)
+
+        # Eksik virgül: number/true/false/null sonrası " karakteri
+        corrected = re.sub(r'(\d)\s*\n\s*"', r'\1,\n"', corrected)
+        corrected = re.sub(r'(true|false|null)\s*\n\s*"', r'\1,\n"', corrected)
+
         # Kesilmiş string'i kapat
         # Son açık tırnak var mı kontrol et
         quote_count = corrected.count('"')
@@ -336,8 +382,8 @@ class AITakeoffThread(QThread):
             corrected = corrected[:-1]
 
         # Eksik kapanışları ekle
-        corrected += ']' * open_brackets
-        corrected += '}' * open_braces
+        corrected += ']' * max(0, open_brackets)
+        corrected += '}' * max(0, open_braces)
 
         return corrected
 
@@ -635,73 +681,205 @@ class QuantityTakeoffManager(QWidget):
         elif action == show_details_action:
             self.show_request_details()
 
+    def format_ai_text(self, text, is_explanation=False):
+        """AI metnini gelişmiş HTML formatına dönüştür"""
+        if not text:
+            if is_explanation:
+                return "<i style='color: #999;'>Hesaplama detayları kaydedilmemiş.</i>"
+            return "<i style='color: #999;'>Kayıt bulunamadı.</i>"
+
+        if not is_explanation:
+            # Basit formatlama (prompt için)
+            return text.replace('\n', '<br>')
+
+        # Gelişmiş formatlama (açıklama için)
+        lines = text.split('\n')
+        formatted_lines = []
+        in_list = False
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                if in_list:
+                    formatted_lines.append('</ul>')
+                    in_list = False
+                formatted_lines.append('<br>')
+                continue
+
+            # Madde işareti ile başlayan satırlar (-, *, •)
+            if stripped.startswith(('-', '*', '•')) and len(stripped) > 1:
+                if not in_list:
+                    formatted_lines.append('<ul style="margin: 5px 0; padding-left: 20px;">')
+                    in_list = True
+                item_text = stripped[1:].strip()
+                item_text = self._format_line_content(item_text)
+                formatted_lines.append(f'<li style="margin: 3px 0;">{item_text}</li>')
+            # Numaralı liste (1., 2., vb.)
+            elif re.match(r'^\d+[\.\)]\s*', stripped):
+                if not in_list:
+                    formatted_lines.append('<ol style="margin: 5px 0; padding-left: 20px;">')
+                    in_list = True
+                item_text = re.sub(r'^\d+[\.\)]\s*', '', stripped)
+                item_text = self._format_line_content(item_text)
+                formatted_lines.append(f'<li style="margin: 3px 0;">{item_text}</li>')
+            # Başlık satırları (: ile biten)
+            elif stripped.endswith(':') and len(stripped) < 60:
+                if in_list:
+                    formatted_lines.append('</ul>' if '</li>' in formatted_lines[-1] else '</ol>')
+                    in_list = False
+                formatted_lines.append(f'<p style="margin: 10px 0 5px 0;"><b style="color: #1565C0; font-size: 10.5pt;">{stripped}</b></p>')
+            else:
+                if in_list:
+                    formatted_lines.append('</ul>' if '<ul' in ''.join(formatted_lines[-5:]) else '</ol>')
+                    in_list = False
+                formatted_line = self._format_line_content(stripped)
+                formatted_lines.append(f'<p style="margin: 4px 0;">{formatted_line}</p>')
+
+        if in_list:
+            formatted_lines.append('</ul>')
+
+        return ''.join(formatted_lines)
+
+    def _format_line_content(self, text):
+        """Satır içeriğini formatla - sayılar, birimler, formüller"""
+        # Formülleri vurgula: L×B×H = 5×3×2 = 30 m³
+        text = re.sub(
+            r'([A-Za-zğüşıöçĞÜŞİÖÇ\d\.]+)\s*[×x\*]\s*([A-Za-zğüşıöçĞÜŞİÖÇ\d\.]+)(\s*[×x\*]\s*[A-Za-zğüşıöçĞÜŞİÖÇ\d\.]+)*',
+            lambda m: f'<code style="background: #E3F2FD; padding: 2px 4px; border-radius: 3px; color: #1565C0;">{m.group(0).replace("*", "×").replace("x", "×")}</code>',
+            text
+        )
+
+        # Eşitlik sonuçlarını vurgula: = 30
+        text = re.sub(
+            r'=\s*(\d+\.?\d*)',
+            r'= <b style="color: #2E7D32;">\1</b>',
+            text
+        )
+
+        # Sayı + birim kombinasyonlarını vurgula
+        text = re.sub(
+            r'(\d+\.?\d*)\s*(m[²³]|m2|m3|kg|ton|adet|sa|TL|cm|mm|lt|litre)',
+            r'<span style="color: #D84315; font-weight: 500;">\1 \2</span>',
+            text,
+            flags=re.IGNORECASE
+        )
+
+        # Yüzde değerlerini vurgula
+        text = re.sub(
+            r'%\s*(\d+\.?\d*)',
+            r'<span style="color: #7B1FA2; font-weight: 500;">%\1</span>',
+            text
+        )
+
+        # Parantez içi açıklamaları italik yap
+        text = re.sub(
+            r'\(([^)]+)\)',
+            r'<i style="color: #666;">(\1)</i>',
+            text
+        )
+
+        return text
+
     def show_request_details(self):
         row = self.group_table.currentRow()
         if row < 0: return
-        
+
         group_id = int(self.group_table.item(row, 0).text())
-        
+        group_name = self.group_table.item(row, 1).text()
+
         # Get extra details from DB (user_prompt, methodology, score)
         conn = self.db.get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT user_prompt, methodology, score FROM quantity_groups WHERE id=?", (group_id,))
         result = cursor.fetchone()
         conn.close()
-        
+
         if not result:
             return
-            
-        user_prompt = result[0] if result[0] else "Kayıt bulunamadı."
-        methodology = result[1] if result[1] else "Hesaplama detayları kaydedilmemiş (Eski sürüm verisi)."
-        group_score = result[2] # Can be None or int
-        
+
+        user_prompt = result[0]
+        methodology = result[1]
+        group_score = result[2]
+
+        # Varsayılan mesajlar
+        default_prompt = "Kullanıcı isteği kaydedilmemiş (Eski sürüm verisi)."
+        default_methodology = "Hesaplama detayları kaydedilmemiş (Eski sürüm verisi)."
+
         dialog = QDialog(self)
-        dialog.setWindowTitle("İstek ve Hesaplama Detayları")
-        dialog.setMinimumSize(600, 400)
-        
+        dialog.setWindowTitle(f"🤖 AI Detayları - {group_name}")
+        dialog.setMinimumSize(700, 550)
+
         layout = QVBoxLayout(dialog)
-        
+
         # Splitter for prompt and methodology
         splitter = QSplitter(Qt.Vertical)
-        
+
         # Top Panel: User Prompt
         prompt_widget = QWidget()
         prompt_layout = QVBoxLayout(prompt_widget)
-        prompt_layout.setContentsMargins(0, 0, 0, 0)
-        prompt_layout.addWidget(QLabel("<b>👤 Kullanıcı İsteği:</b>"))
-        
+        prompt_layout.setContentsMargins(0, 0, 0, 5)
+        prompt_layout.addWidget(QLabel("<b style='font-size: 11pt;'>👤 Kullanıcı İsteği:</b>"))
+
         prompt_text = QTextEdit()
         prompt_text.setReadOnly(True)
-        prompt_text.setText(user_prompt)
+        formatted_prompt = self.format_ai_text(user_prompt or default_prompt, is_explanation=False)
+        prompt_text.setHtml(f"""
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; font-size: 10pt; line-height: 1.5; color: #333;">
+                {formatted_prompt}
+            </div>
+        """)
+        prompt_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #FFF8E1;
+                border: 1px solid #FFE082;
+                border-radius: 6px;
+                padding: 10px;
+            }
+        """)
         prompt_layout.addWidget(prompt_text)
-        
         splitter.addWidget(prompt_widget)
-        
+
         # Bottom Panel: Methodology
         methodology_widget = QWidget()
         methodology_layout = QVBoxLayout(methodology_widget)
-        methodology_layout.setContentsMargins(0, 0, 0, 0)
-        methodology_layout.addWidget(QLabel("<b>🤖 AI Hesaplama Mantığı & Varsayımlar:</b>"))
-        
+        methodology_layout.setContentsMargins(0, 5, 0, 0)
+        methodology_layout.addWidget(QLabel("<b style='font-size: 11pt;'>🤖 AI Hesaplama Mantığı & Varsayımlar:</b>"))
+
         methodology_text = QTextEdit()
         methodology_text.setReadOnly(True)
-        if methodology:
-             methodology_text.setPlainText(methodology)
-        else:
-             methodology_text.setPlaceholderText("Methodoloji bilgisi bulunamadı.")
+        formatted_methodology = self.format_ai_text(methodology or default_methodology, is_explanation=True)
+        methodology_text.setHtml(f"""
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; font-size: 10pt; line-height: 1.6; color: #333;">
+                {formatted_methodology}
+            </div>
+        """)
+        methodology_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #E8F5E9;
+                border: 1px solid #A5D6A7;
+                border-radius: 6px;
+                padding: 10px;
+            }
+        """)
         methodology_layout.addWidget(methodology_text)
-        
         splitter.addWidget(methodology_widget)
 
         layout.addWidget(splitter)
-        
+
         # --- Scoring Section ---
         score_layout = QHBoxLayout()
-        score_layout.addWidget(QLabel("<b>AI Cevap Puanı:</b>"))
-        
+        score_layout.addWidget(QLabel("<b>⭐ AI Cevap Puanı:</b>"))
+
         score_combo = QComboBox()
-        score_combo.addItems(["Seçiniz", "⭐ 1 - Kötü", "⭐⭐ 2 - Zayıf", "⭐⭐⭐ 3 - Orta", "⭐⭐⭐⭐ 4 - İyi", "⭐⭐⭐⭐⭐ 5 - Mükemmel"])
-        
+        score_combo.addItems([
+            "Seçiniz...",
+            "⭐ 1 - Kötü (Kullanılamaz)",
+            "⭐⭐ 2 - Zayıf (Çok düzeltme gerekli)",
+            "⭐⭐⭐ 3 - Orta (Düzeltmelerle kullanılabilir)",
+            "⭐⭐⭐⭐ 4 - İyi (Az düzeltme gerekli)",
+            "⭐⭐⭐⭐⭐ 5 - Mükemmel (Doğrudan kullanılabilir)"
+        ])
+
         # Load current score
         if group_score is not None:
             try:
@@ -710,25 +888,34 @@ class QuantityTakeoffManager(QWidget):
                     score_combo.setCurrentIndex(score_val)
             except:
                 pass
-                
+
         score_layout.addWidget(score_combo)
-        
-        save_score_btn = QPushButton("Puanı Kaydet")
-        save_score_btn.setStyleSheet("background-color: #FFC107; font-weight: bold;")
+
+        save_score_btn = QPushButton("💾 Puanı Kaydet")
+        save_score_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #FFC107;
+                color: black;
+                font-weight: bold;
+                padding: 8px 16px;
+                border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #FFB300; }
+        """)
         score_layout.addWidget(save_score_btn)
-        
+
         layout.addLayout(score_layout)
-        
+
         def save_score():
             idx = score_combo.currentIndex()
             if idx == 0:
                 QMessageBox.warning(dialog, "Uyarı", "Lütfen bir puan seçin.")
                 return
-            
-            score_val = idx 
+
+            score_val = idx
             self.db.update_quantity_group_score(group_id, score_val)
             QMessageBox.information(dialog, "Başarılı", "Puan kaydedildi.")
-            
+
         save_score_btn.clicked.connect(save_score)
 
         # Close button

@@ -1,14 +1,76 @@
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QTableWidget, QTableWidgetItem, 
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+                             QPushButton, QTableWidget, QTableWidgetItem,
                              QHeaderView, QLineEdit, QGroupBox, QTextEdit,
                              QMessageBox, QInputDialog, QProgressBar, QFormLayout, QDialog,
-                             QPlainTextEdit, QDialogButtonBox)
+                             QPlainTextEdit, QDialogButtonBox, QComboBox, QScrollArea, QFrame,
+                             QApplication)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont
 from database import DatabaseManager
 import json
 import requests
 import re
-import re
+
+
+class ErrorDialog(QDialog):
+    """Kopyalanabilir hata mesajı gösteren dialog"""
+    def __init__(self, parent=None, title="Hata", message=""):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumSize(550, 350)
+        self.setup_ui(message)
+
+    def setup_ui(self, message):
+        layout = QVBoxLayout(self)
+
+        # Hata ikonu ve başlık
+        header = QLabel("❌ Bir hata oluştu:")
+        header.setStyleSheet("font-weight: bold; font-size: 12pt; color: #D32F2F;")
+        layout.addWidget(header)
+
+        # Kopyalanabilir hata mesajı
+        self.error_text = QPlainTextEdit()
+        self.error_text.setPlainText(message)
+        self.error_text.setReadOnly(True)
+        self.error_text.setFont(QFont("Consolas", 9))
+        self.error_text.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #FFEBEE;
+                border: 1px solid #EF9A9A;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+        layout.addWidget(self.error_text)
+
+        # Bilgi notu
+        info = QLabel("💡 Hata 503 (overloaded) ise, birkaç dakika bekleyip tekrar deneyin.")
+        info.setStyleSheet("color: #666; font-size: 9pt;")
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        # Butonlar
+        btn_layout = QHBoxLayout()
+
+        copy_btn = QPushButton("📋 Kopyala")
+        copy_btn.clicked.connect(self.copy_error)
+        copy_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 8px 16px;")
+        btn_layout.addWidget(copy_btn)
+
+        btn_layout.addStretch()
+
+        close_btn = QPushButton("Kapat")
+        close_btn.clicked.connect(self.accept)
+        close_btn.setStyleSheet("padding: 8px 16px;")
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def copy_error(self):
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self.error_text.toPlainText())
+        QMessageBox.information(self, "Kopyalandı", "Hata mesajı panoya kopyalandı.")
+
 
 class AIPromptDialog(QDialog):
     def __init__(self, parent=None, title="AI Asistan", label="Talep:"):
@@ -38,8 +100,8 @@ class AIPromptDialog(QDialog):
 class AIAnalysisThread(QThread):
     finished = pyqtSignal(list, str, str) # components, explanation, error
     status_update = pyqtSignal(str)
-    
-    def __init__(self, description, unit, api_key, model, base_url, context_data="", gemini_key=None, gemini_model=None, provider="OpenRouter"):
+
+    def __init__(self, description, unit, api_key, model, base_url, context_data="", gemini_key=None, gemini_model=None, provider="OpenRouter", nakliye_params=None):
         super().__init__()
         self.description = description
         self.unit = unit
@@ -50,71 +112,148 @@ class AIAnalysisThread(QThread):
         self.gemini_key = gemini_key
         self.gemini_model = gemini_model
         self.provider = provider
+        self.nakliye_params = nakliye_params or {}
         
     def run(self):
+        # Nakliye parametrelerini al
+        nakliye_mesafe = self.nakliye_params.get('mesafe', 20000)  # metre
+        nakliye_k = self.nakliye_params.get('k', 1.0)
+        nakliye_a = self.nakliye_params.get('a', 1.0)
+        yogunluk_kum = self.nakliye_params.get('yogunluk_kum', 1.60)
+        yogunluk_moloz = self.nakliye_params.get('yogunluk_moloz', 1.80)
+        yogunluk_beton = self.nakliye_params.get('yogunluk_beton', 2.40)
+        yogunluk_cimento = self.nakliye_params.get('yogunluk_cimento', 1.50)
+        yogunluk_demir = self.nakliye_params.get('yogunluk_demir', 7.85)
+        nakliye_mode = self.nakliye_params.get('mode', 'ai')
+
+        # KGM Formül bilgisi
+        nakliye_km = nakliye_mesafe / 1000  # km'ye çevir
+
         # PROMPT ENGINEERING FOR TURKISH COMPLIANCE
         prompt = f"""
         Sen uzman bir Türk İnşaat Metraj ve Hakediş Mühendisisin.
-        
+
         Görev: Aşağıdaki poz tanımı için "Çevre ve Şehircilik Bakanlığı" birim fiyat analiz formatına uygun detaylı bir analiz oluştur.
-        
+
         Poz Tanımı: {self.description}
         Poz Birimi: {self.unit}
-        
+
         EK BAĞLAM (MEVCUT KAYNAKLARDAN BULUNAN İLGİLİ POZLAR):
         {self.context_data}
-        
+
         Kurallar:
         1. Analiz şu bileşenleri içermelidir:
            - Malzeme (Örn: Çimento, Kum, Tuğla, vb.)
            - İşçilik (Örn: Usta, Düz işçi)
-           - Makine (varsa)
-        4. Miktarlar gerçekçi inşaat normlarına (analiz kitaplarına) dayanmalıdır.
-        5. Birim fiyatlar 2024-2025 yılı ortalama piyasa rayiçleri (TL) olmalıdır.
-        6. Çıktı SADECE geçerli bir JSON formatında olmalı.
-        7. Lütfen JSON içindeki metin alanlarında çift tırnak (") kullanmaktan kaçının veya escape edin (\").
-        
+           - Makine (varsa - vinç, beton pompası, vb.)
+           - Nakliye (ZORUNLU - malzeme nakliyesi mutlaka hesaplanmalı)
+
+        2. KGM 2025 NAKLİYE HESABI (Karayolları Genel Müdürlüğü Formülleri):
+           KULLANILACAK PARAMETRELER:
+           - Ortalama Taşıma Mesafesi (M): {nakliye_mesafe} metre ({nakliye_km:.1f} km)
+           - Taşıma Katsayısı (K): {nakliye_k}
+           - A Katsayısı (Taşıma Şartları): {nakliye_a}
+
+           MALZEME YOĞUNLUKLARI (Y - ton/m³):
+           - Kum, Çakıl, Stabilize, Kırmataş: {yogunluk_kum} ton/m³
+           - Anroşman, Moloz Taş: {yogunluk_moloz} ton/m³
+           - Beton, Prefabrik: {yogunluk_beton} ton/m³
+           - Çimento: {yogunluk_cimento} ton/m³
+           - Betonarme Demiri: {yogunluk_demir} ton/m³
+
+           NAKLİYE FORMÜLÜ (07.005/K - 10.000 m'ye kadar):
+           F = 1,25 × 0,00017 × K × M × Y × A  (m³ için)
+           F = 1,25 × 0,00017 × K × M × A      (ton için)
+
+           NAKLİYE FORMÜLÜ (07.006/K - 10.000 m'den fazla):
+           F = 1,25 × K × (0,0007 × M + 0,01) × Y × A  (m³ için)
+           F = 1,25 × K × (0,0007 × M + 0,01) × A      (ton için)
+
+           ÖNEMLİ:
+           - Her ağır malzeme (beton, çimento, demir, kum, çakıl) için nakliye kalemi AYRI SATIR olarak ekle
+           - Nakliye birim fiyatını yukarıdaki formüle göre hesapla
+           - Nakliye miktarı = Malzeme miktarı × Yoğunluk (ton cinsinden)
+           - Nakliye tipi: "type": "Nakliye" olarak belirt
+           - Nakliye kodu: "07.005/K" veya "07.006/K" kullan
+
+        3. Miktarlar gerçekçi inşaat normlarına (analiz kitaplarına) dayanmalıdır.
+        4. Birim fiyatlar 2024-2025 yılı ortalama piyasa rayiçleri (TL) olmalıdır.
+        5. Çıktı SADECE geçerli bir JSON formatında olmalı.
+        6. Lütfen JSON içindeki metin alanlarında çift tırnak (") kullanmaktan kaçının veya escape edin (\").
+
         JSON Formatı Şablonu:
         {{
-          "explanation": "Bu analizi oluştururken ... mantığını kullandım. Şu pozları referans aldım: ...",
+          "explanation": "Bu analizi oluştururken ... mantığını kullandım. Nakliye hesabını KGM 2025 formülüne göre şu şekilde yaptım: F = 1,25 × {nakliye_k} × 0,00017 × {nakliye_mesafe} × Y × {nakliye_a} = ... TL/ton",
           "components": [
-              {{ "type": "Malzeme", "code": "10.xxx", "name": "Malzeme Adı", "unit": "kg/m/adet", "quantity": 0.0, "unit_price": 0.0 }},
-              {{ "type": "İşçilik", "code": "01.xxx", "name": "İşçilik Adı", "unit": "sa", "quantity": 0.0, "unit_price": 0.0 }}
+              {{ "type": "Malzeme", "code": "10.xxx", "name": "Malzeme Adı", "unit": "kg/m³/adet", "quantity": 0.0, "unit_price": 0.0 }},
+              {{ "type": "İşçilik", "code": "01.xxx", "name": "İşçilik Adı", "unit": "sa", "quantity": 0.0, "unit_price": 0.0 }},
+              {{ "type": "Makine", "code": "03.xxx", "name": "Makine Adı", "unit": "sa", "quantity": 0.0, "unit_price": 0.0 }},
+              {{ "type": "Nakliye", "code": "07.005/K", "name": "Çimento Nakliyesi ({nakliye_km:.0f}km)", "unit": "ton", "quantity": 0.0, "unit_price": 0.0 }},
+              {{ "type": "Nakliye", "code": "07.005/K", "name": "Demir Nakliyesi ({nakliye_km:.0f}km)", "unit": "ton", "quantity": 0.0, "unit_price": 0.0 }}
           ]
         }}
-        
-        Lütfen "explanation" kısmında neden bu malzemeleri ve miktarları seçtiğini, hangi yöntemle hesapladığını detaylıca anlat.
+
+        Lütfen "explanation" kısmında neden bu malzemeleri ve miktarları seçtiğini, nakliye hesabını hangi formülle yaptığını detaylıca anlat.
         """
 
+        gemini_error = None
+        openrouter_error = None
+
         if self.provider == "Google Gemini":
-             if self.gemini_key:
+            # Birincil: Gemini
+            if self.gemini_key:
                 try:
                     self.status_update.emit("🤖 Gemini ile hesaplanıyor...")
                     self.call_gemini(prompt)
-                    return
+                    return  # Başarılı, çık
                 except Exception as e:
-                     self.status_update.emit("⚠️ Gemini hatası, OpenRouter deneniyor...")
-             else:
-                 self.status_update.emit("⚠️ Gemini anahtarı yok, OpenRouter kullanılıyor...")
-        
-        # Default (OpenRouter) or Fallback
-        try:
-            if not self.api_key:
-                raise Exception("API Anahtarı eksik! Ayarlar'dan ekleyiniz.")
-
-            self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
-            self.call_openrouter(prompt)
-
-        except Exception as e:
-            # Fallback to Gemini if OpenRouter was primary
-            if self.provider != "Google Gemini" and self.gemini_key:
-                try:
-                    self.status_update.emit("⚠️ OpenRouter hatası, Gemini deneniyor...")
-                    self.call_gemini(prompt)
-                except Exception as gemini_e:
-                     self.finished.emit([], "", f"Tüm kaynaklar başarısız.\nOR: {e}\nGemini: {gemini_e}")
+                    gemini_error = str(e)
+                    self.status_update.emit("⚠️ Gemini hatası, OpenRouter deneniyor...")
             else:
-                self.finished.emit([], "", str(e))
+                gemini_error = "Gemini API anahtarı tanımlı değil"
+                self.status_update.emit("⚠️ Gemini anahtarı yok, OpenRouter kullanılıyor...")
+
+            # Yedek: OpenRouter
+            if self.api_key:
+                try:
+                    self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
+                    self.call_openrouter(prompt)
+                    return  # Başarılı, çık
+                except Exception as e:
+                    openrouter_error = str(e)
+            else:
+                openrouter_error = "OpenRouter API anahtarı tanımlı değil"
+
+            # Her ikisi de başarısız
+            self.finished.emit([], "", f"Tüm kaynaklar başarısız.\nGemini: {gemini_error}\nOpenRouter: {openrouter_error}")
+
+        else:
+            # Birincil: OpenRouter
+            if self.api_key:
+                try:
+                    self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
+                    self.call_openrouter(prompt)
+                    return  # Başarılı, çık
+                except Exception as e:
+                    openrouter_error = str(e)
+                    self.status_update.emit("⚠️ OpenRouter hatası, Gemini deneniyor...")
+            else:
+                openrouter_error = "OpenRouter API anahtarı tanımlı değil"
+                self.status_update.emit("⚠️ OpenRouter anahtarı yok, Gemini kullanılıyor...")
+
+            # Yedek: Gemini
+            if self.gemini_key:
+                try:
+                    self.status_update.emit("🤖 Gemini ile hesaplanıyor...")
+                    self.call_gemini(prompt)
+                    return  # Başarılı, çık
+                except Exception as e:
+                    gemini_error = str(e)
+            else:
+                gemini_error = "Gemini API anahtarı tanımlı değil"
+
+            # Her ikisi de başarısız
+            self.finished.emit([], "", f"Tüm kaynaklar başarısız.\nOpenRouter: {openrouter_error}\nGemini: {gemini_error}")
 
     def call_openrouter(self, prompt):
         headers = {
@@ -123,24 +262,38 @@ class AIAnalysisThread(QThread):
             "HTTP-Referer": "https://yaklasikmaliyetpro.com",
             "X-Title": "Yaklasik Maliyet Pro"
         }
-        
+
         data = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": "You are a helpful construction estimation assistant. Output valid JSON only."},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.2, 
-            "max_tokens": 2000
+            "temperature": 0.2,
+            "max_tokens": 4000
         }
-        
-        response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=30)
-        
+
+        response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=60)
+
         if response.status_code != 200:
-            raise Exception(f"API Hatası: {response.text}")
-            
-        result = response.json()
+            raise Exception(f"API Hatası ({response.status_code}): {response.text[:500]}")
+
+        # Boş yanıt kontrolü
+        if not response.text or not response.text.strip():
+            raise Exception("API boş yanıt döndürdü")
+
+        try:
+            result = response.json()
+        except Exception as e:
+            raise Exception(f"JSON parse hatası: {str(e)}")
+
+        if 'choices' not in result or not result['choices']:
+            raise Exception(f"Geçersiz API yanıtı: {str(result)[:300]}")
+
         content = result['choices'][0]['message']['content']
+        if not content:
+            raise Exception("API içerik boş döndürdü")
+
         self.process_response(content)
 
     def call_gemini(self, prompt):
@@ -167,8 +320,17 @@ class AIAnalysisThread(QThread):
 
     def process_response(self, content):
         content = self.clean_json_string(content)
-        data = json.loads(content)
-        
+
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as e:
+            # JSON parse hatası - onarma dene
+            repaired = self._repair_json(content)
+            try:
+                data = json.loads(repaired)
+            except:
+                raise Exception(f"JSON parse hatası: {str(e)}")
+
         # Handle formats
         if isinstance(data, list):
             components = data
@@ -176,12 +338,60 @@ class AIAnalysisThread(QThread):
         else:
             components = data.get('components', [])
             explanation = data.get('explanation', "Açıklama yapılmadı.")
-        
+
         # Calculate totals
         for comp in components:
-            comp['total_price'] = float(comp['quantity']) * float(comp['unit_price'])
-            
+            try:
+                comp['total_price'] = float(comp.get('quantity', 0)) * float(comp.get('unit_price', 0))
+            except:
+                comp['total_price'] = 0
+
         self.finished.emit(components, explanation, "")
+
+    def _repair_json(self, content):
+        """Bozuk JSON'u onarmaya çalış"""
+        # Trailing comma temizliği
+        content = re.sub(r',\s*}', '}', content)
+        content = re.sub(r',\s*]', ']', content)
+
+        # Eksik virgül ekleme: "value" "key" -> "value", "key"
+        # Bu pattern iki string arasında eksik virgülü yakalar
+        content = re.sub(r'"\s*\n\s*"', '",\n"', content)
+        content = re.sub(r'"\s+"', '", "', content)
+
+        # Eksik virgül: } { veya ] [ arasında
+        content = re.sub(r'}\s*{', '}, {', content)
+        content = re.sub(r']\s*\[', '], [', content)
+
+        # Eksik virgül: } "key" veya ] "value" arasında
+        content = re.sub(r'}\s*"', '}, "', content)
+        content = re.sub(r']\s*"', '], "', content)
+
+        # Eksik virgül: number/true/false/null sonrası " karakteri
+        content = re.sub(r'(\d)\s*\n\s*"', r'\1,\n"', content)
+        content = re.sub(r'(true|false|null)\s*\n\s*"', r'\1,\n"', content)
+
+        # Kesilmiş string'i kapat
+        quote_count = content.count('"')
+        if quote_count % 2 != 0:
+            content = content.rstrip()
+            if not content.endswith('"'):
+                content += '"'
+
+        # Eksik kapanış parantezlerini say ve ekle
+        open_braces = content.count('{') - content.count('}')
+        open_brackets = content.count('[') - content.count(']')
+
+        # Trailing virgül varsa kaldır
+        content = content.rstrip()
+        if content.endswith(','):
+            content = content[:-1]
+
+        # Eksik kapanışları ekle
+        content += ']' * max(0, open_brackets)
+        content += '}' * max(0, open_braces)
+
+        return content
 
     def clean_json_string(self, s):
         """Remove markdown code blocks from string and try to extract JSON"""
@@ -342,13 +552,30 @@ class AnalysisBuilder(QWidget):
         gemini_model = self.db.get_setting("gemini_model") or "gemini-1.5-flash"
         
         provider = self.db.get_setting("ai_provider") or "OpenRouter"
-        
+
+        # KGM 2025 Nakliye Parametrelerini Al
+        nakliye_mode = self.db.get_setting("nakliye_mode") or "AI'ya Bırak (Varsayılan değerler kullanılır)"
+        nakliye_params = {
+            'mode': 'manual' if 'Manuel' in nakliye_mode else 'ai',
+            'mesafe': int(self.db.get_setting("nakliye_mesafe") or 20000),
+            'k': float(self.db.get_setting("nakliye_k") or 1.0),
+            'a': float(self.db.get_setting("nakliye_a") or 1.0),
+            'yogunluk_kum': float(self.db.get_setting("yogunluk_kum") or 1.60),
+            'yogunluk_moloz': float(self.db.get_setting("yogunluk_moloz") or 1.80),
+            'yogunluk_beton': float(self.db.get_setting("yogunluk_beton") or 2.40),
+            'yogunluk_cimento': float(self.db.get_setting("yogunluk_cimento") or 1.50),
+            'yogunluk_demir': float(self.db.get_setting("yogunluk_demir") or 7.85),
+        }
+
         self.set_loading(True)
-        
+
         # RAG Implementation: Extract keywords and search context
         context_text = self.extract_and_format_context(desc)
-        
-        self.thread = AIAnalysisThread(desc, unit, api_key, model, base_url, context_text, gemini_key, gemini_model, provider)
+
+        # Kullanıcı promptunu sakla (kayıt için)
+        self._last_ai_prompt = desc
+
+        self.thread = AIAnalysisThread(desc, unit, api_key, model, base_url, context_text, gemini_key, gemini_model, provider, nakliye_params)
         self.thread.finished.connect(self.on_ai_finished)
         self.thread.status_update.connect(lambda s: self.generate_btn.setText(s))
         self.thread.start()
@@ -408,13 +635,23 @@ class AnalysisBuilder(QWidget):
     def on_ai_finished(self, components, explanation, error):
         self.set_loading(False)
         if error:
-            QMessageBox.critical(self, "Hata", f"AI Hatası: {error}")
+            # Kopyalanabilir hata dialogu göster
+            dialog = ErrorDialog(self, "AI İşlem Hatası", error)
+            dialog.exec_()
             return
-            
+
+        # Son AI açıklamasını sakla
+        self.last_ai_explanation = explanation
+        self.last_ai_prompt = getattr(self, '_last_ai_prompt', '')
+
+        # Debug: Açıklama kontrolü
+        if not explanation or explanation.strip() == "":
+            print(f"[DEBUG] AI açıklaması boş geldi!")
+
         # Populate table
         self.comp_table.blockSignals(True)
         self.comp_table.setRowCount(0)
-        
+
         for row, comp in enumerate(components):
             self.comp_table.insertRow(row)
             self.comp_table.setItem(row, 0, QTableWidgetItem(comp.get('type', 'Malzeme')))
@@ -423,16 +660,194 @@ class AnalysisBuilder(QWidget):
             self.comp_table.setItem(row, 3, QTableWidgetItem(comp.get('unit', '')))
             self.comp_table.setItem(row, 4, QTableWidgetItem(str(comp.get('quantity', 0))))
             self.comp_table.setItem(row, 5, QTableWidgetItem(str(comp.get('unit_price', 0))))
-            
+
         self.comp_table.blockSignals(False)
         self.recalc_totals()
-        
-        # Show Rationale Report
-        QMessageBox.information(
-            self, 
-            "Yapay Zeka Analiz Raporu", 
-            f"✅ Analiz Oluşturuldu!\n\n🔍 **AI Açıklaması:**\n{explanation}\n\nLütfen tabloyu kontrol edip kaydedin."
+
+        # Puanlama dialogu göster
+        self.show_ai_rating_dialog(explanation)
+
+    def format_ai_explanation(self, text):
+        """AI açıklamasını gelişmiş HTML formatına dönüştür"""
+        if not text:
+            return "<i style='color: #999;'>Açıklama mevcut değil.</i>"
+
+        import re
+        lines = text.split('\n')
+        formatted_lines = []
+        in_list = False
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                if in_list:
+                    formatted_lines.append('</ul>')
+                    in_list = False
+                formatted_lines.append('<br>')
+                continue
+
+            # Madde işareti ile başlayan satırlar (-, *, •)
+            if stripped.startswith(('-', '*', '•')) and len(stripped) > 1:
+                if not in_list:
+                    formatted_lines.append('<ul style="margin: 5px 0; padding-left: 20px;">')
+                    in_list = True
+                item_text = stripped[1:].strip()
+                item_text = self._format_line_content(item_text)
+                formatted_lines.append(f'<li style="margin: 3px 0;">{item_text}</li>')
+            # Numaralı liste (1., 2., vb.)
+            elif re.match(r'^\d+[\.\)]\s*', stripped):
+                if not in_list:
+                    formatted_lines.append('<ol style="margin: 5px 0; padding-left: 20px;">')
+                    in_list = True
+                item_text = re.sub(r'^\d+[\.\)]\s*', '', stripped)
+                item_text = self._format_line_content(item_text)
+                formatted_lines.append(f'<li style="margin: 3px 0;">{item_text}</li>')
+            # Başlık satırları (: ile biten)
+            elif stripped.endswith(':') and len(stripped) < 60:
+                if in_list:
+                    formatted_lines.append('</ul>' if '</li>' in formatted_lines[-1] else '</ol>')
+                    in_list = False
+                formatted_lines.append(f'<p style="margin: 10px 0 5px 0;"><b style="color: #1565C0; font-size: 10.5pt;">{stripped}</b></p>')
+            else:
+                if in_list:
+                    formatted_lines.append('</ul>' if '<ul' in ''.join(formatted_lines[-5:]) else '</ol>')
+                    in_list = False
+                formatted_line = self._format_line_content(stripped)
+                formatted_lines.append(f'<p style="margin: 4px 0;">{formatted_line}</p>')
+
+        if in_list:
+            formatted_lines.append('</ul>')
+
+        return ''.join(formatted_lines)
+
+    def _format_line_content(self, text):
+        """Satır içeriğini formatla - sayılar, birimler, formüller"""
+        import re
+
+        # Formülleri vurgula: L×B×H = 5×3×2 = 30 m³
+        text = re.sub(
+            r'([A-Za-zğüşıöçĞÜŞİÖÇ\d\.]+)\s*[×x\*]\s*([A-Za-zğüşıöçĞÜŞİÖÇ\d\.]+)(\s*[×x\*]\s*[A-Za-zğüşıöçĞÜŞİÖÇ\d\.]+)*',
+            lambda m: f'<code style="background: #E3F2FD; padding: 2px 4px; border-radius: 3px; color: #1565C0;">{m.group(0).replace("*", "×").replace("x", "×")}</code>',
+            text
         )
+
+        # Eşitlik sonuçlarını vurgula: = 30
+        text = re.sub(
+            r'=\s*(\d+\.?\d*)',
+            r'= <b style="color: #2E7D32;">\1</b>',
+            text
+        )
+
+        # Sayı + birim kombinasyonlarını vurgula
+        text = re.sub(
+            r'(\d+\.?\d*)\s*(m[²³]|m2|m3|kg|ton|adet|sa|TL|cm|mm|lt|litre)',
+            r'<span style="color: #D84315; font-weight: 500;">\1 \2</span>',
+            text,
+            flags=re.IGNORECASE
+        )
+
+        # Yüzde değerlerini vurgula
+        text = re.sub(
+            r'%\s*(\d+\.?\d*)',
+            r'<span style="color: #7B1FA2; font-weight: 500;">%\1</span>',
+            text
+        )
+
+        # Parantez içi açıklamaları italik yap
+        text = re.sub(
+            r'\(([^)]+)\)',
+            r'<i style="color: #666;">(\1)</i>',
+            text
+        )
+
+        return text
+
+    def show_ai_rating_dialog(self, explanation):
+        """AI sonucu için puanlama dialogu göster"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("🤖 Yapay Zeka Analiz Sonucu")
+        dialog.setMinimumSize(650, 550)
+
+        layout = QVBoxLayout(dialog)
+
+        # Başlık
+        header = QLabel("✅ Analiz Başarıyla Oluşturuldu!")
+        header.setStyleSheet("font-size: 14pt; font-weight: bold; color: #4CAF50; margin-bottom: 10px;")
+        layout.addWidget(header)
+
+        # AI Açıklaması
+        explanation_group = QGroupBox("🔍 AI Açıklaması ve Hesaplama Mantığı")
+        explanation_layout = QVBoxLayout(explanation_group)
+
+        explanation_text = QTextEdit()
+        formatted_explanation = self.format_ai_explanation(explanation)
+        explanation_text.setHtml(f"""
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; font-size: 10pt; line-height: 1.6;">
+                {formatted_explanation}
+            </div>
+        """)
+        explanation_text.setReadOnly(True)
+        explanation_text.setMinimumHeight(200)
+        explanation_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #FAFAFA;
+                border: 1px solid #E0E0E0;
+                border-radius: 6px;
+                padding: 12px;
+            }
+        """)
+        explanation_layout.addWidget(explanation_text)
+        layout.addWidget(explanation_group)
+
+        # Puanlama Bölümü
+        rating_group = QGroupBox("⭐ AI Cevabını Puanla")
+        rating_layout = QVBoxLayout(rating_group)
+
+        rating_info = QLabel("Bu puanlama, yapay zekanın gelecekteki analizlerini iyileştirmemize yardımcı olur.")
+        rating_info.setStyleSheet("color: #666; font-size: 9pt;")
+        rating_layout.addWidget(rating_info)
+
+        score_layout = QHBoxLayout()
+        score_layout.addWidget(QLabel("<b>Puan:</b>"))
+
+        self.ai_score_combo = QComboBox()
+        self.ai_score_combo.addItems([
+            "Seçiniz...",
+            "⭐ 1 - Kötü (Kullanılamaz)",
+            "⭐⭐ 2 - Zayıf (Çok düzeltme gerekli)",
+            "⭐⭐⭐ 3 - Orta (Düzeltmelerle kullanılabilir)",
+            "⭐⭐⭐⭐ 4 - İyi (Az düzeltme gerekli)",
+            "⭐⭐⭐⭐⭐ 5 - Mükemmel (Doğrudan kullanılabilir)"
+        ])
+        self.ai_score_combo.setMinimumWidth(300)
+        score_layout.addWidget(self.ai_score_combo)
+        score_layout.addStretch()
+
+        rating_layout.addLayout(score_layout)
+        layout.addWidget(rating_group)
+
+        # Bilgi notu
+        note = QLabel("💡 Tabloyu kontrol edip gerekli düzeltmeleri yapın, ardından 'Analizi Kaydet' butonuna tıklayın.")
+        note.setStyleSheet("color: #1976D2; font-weight: bold; margin-top: 10px;")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        # Butonlar
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        close_btn = QPushButton("Tamam")
+        close_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 10px 30px;")
+        close_btn.clicked.connect(dialog.accept)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+        dialog.exec_()
+
+        # Puanı kaydet (geçici olarak, analiz kaydedildiğinde DB'ye yazılacak)
+        score_idx = self.ai_score_combo.currentIndex()
+        self.pending_ai_score = score_idx if score_idx > 0 else None
 
     def add_empty_row(self):
         row = self.comp_table.rowCount()
@@ -491,7 +906,7 @@ class AnalysisBuilder(QWidget):
         if not poz_no:
             QMessageBox.warning(self, "Uyarı", "Lütfen bir Poz No girin.")
             return
-            
+
         components = []
         for i in range(self.comp_table.rowCount()):
             try:
@@ -507,9 +922,31 @@ class AnalysisBuilder(QWidget):
                 components.append(comp)
             except:
                 continue
-                
+
         if self.db.save_analysis(poz_no, self.desc_input.text(), self.unit_input.text(), components, is_ai=True):
+            # Analiz ID'sini al ve AI verilerini kaydet
+            analysis = self.db.get_analysis_by_poz_no(poz_no)
+            if analysis:
+                analysis_id = analysis['id']
+
+                # AI açıklaması ve prompt'u kaydet
+                ai_explanation = getattr(self, 'last_ai_explanation', None)
+                ai_prompt = getattr(self, 'last_ai_prompt', None)
+                if ai_explanation or ai_prompt:
+                    self.db.update_analysis_ai_data(analysis_id, ai_explanation, ai_prompt)
+
+                # Puanı kaydet
+                pending_score = getattr(self, 'pending_ai_score', None)
+                if pending_score:
+                    self.db.update_analysis_score(analysis_id, pending_score)
+
             QMessageBox.information(self, "Kayıt", "Analiz başarıyla kaydedildi!")
+
+            # Değişkenleri temizle
+            self.last_ai_explanation = None
+            self.last_ai_prompt = None
+            self.pending_ai_score = None
+
             return True
         else:
             QMessageBox.critical(self, "Hata", "Kayıt sırasında hata oluştu. Poz No benzersiz olmalıdır.")
