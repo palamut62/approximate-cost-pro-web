@@ -164,6 +164,11 @@ class DatabaseManager:
         except:
             pass
 
+        try:
+            cursor.execute('ALTER TABLE quantity_groups ADD COLUMN score INTEGER DEFAULT 0')
+        except:
+            pass
+
         conn.commit()
         conn.close()
 
@@ -607,24 +612,36 @@ class DatabaseManager:
         return results
 
     # --- Quantity Group Methods ---
-    def add_quantity_group(self, name, unit, user_prompt=None, methodology=None):
+    def add_quantity_group(self, name, unit, user_prompt="", methodology=""):
+        """Yeni bir imalat grubu oluştur"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        now = datetime.now().strftime("%Y-%m-%d %H:%M")
-        cursor.execute('INSERT INTO quantity_groups (name, unit, created_date, user_prompt, methodology) VALUES (?, ?, ?, ?, ?)', (name, unit, now, user_prompt, methodology))
+        cursor.execute("INSERT INTO quantity_groups (name, unit, created_date, user_prompt, methodology) VALUES (?, ?, datetime('now'), ?, ?)", 
+                       (name, unit, user_prompt, methodology))
         group_id = cursor.lastrowid
         conn.commit()
         conn.close()
         return group_id
 
-    def get_quantity_groups(self):
+    def update_quantity_group_score(self, group_id, score):
+        """Grubun AI puanını güncelle"""
         conn = self.get_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM quantity_groups ORDER BY created_date DESC')
-        columns = [description[0] for description in cursor.description]
-        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        cursor.execute("UPDATE quantity_groups SET score = ? WHERE id = ?", (score, group_id))
+        conn.commit()
         conn.close()
-        return results
+
+    def get_quantity_groups(self):
+        """Tüm imalat gruplarını getir (En yeni en üstte)"""
+        import sqlite3
+        conn = self.get_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        # id, name, unit, created_date, user_prompt, methodology, score
+        cursor.execute("SELECT * FROM quantity_groups ORDER BY id DESC")
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        return rows
 
     def delete_quantity_group(self, group_id):
         conn = self.get_connection()

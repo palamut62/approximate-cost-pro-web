@@ -480,6 +480,7 @@ class AnalysisBuilder(QWidget):
         # Compliance: 25% Overhead & Profit
         overhead = total * 0.25
         final_total = total + overhead
+        self.current_final_total = final_total # Store for later use
         
         self.base_total_label.setText(f"Analiz Toplamı (Malzeme+İşçilik): {total:,.2f} TL")
         self.overhead_label.setText(f"Yüklenici Kârı + Genel Giderler (%25): {overhead:,.2f} TL")
@@ -518,14 +519,27 @@ class AnalysisBuilder(QWidget):
         """Save analysis and add to active project cost"""
         if self.save_analysis():
             # Get Price from label
-            txt = self.final_total_label.text()
+            # Get Price from stored value or label
             price = 0.0
-            try:
-                # "Birim Fiyat (Kârlı): 1.234,56 TL"
-                val_str = txt.split(':')[1].replace(' TL', '').strip()
-                price = float(val_str.replace('.', '').replace(',', '.'))
-            except:
-                pass
+            if hasattr(self, 'current_final_total'):
+                price = self.current_final_total
+            else:
+                try:
+                    # Fallback parsing
+                    txt = self.final_total_label.text()
+                    val_str = txt.split(':')[1].replace(' TL', '').strip()
+                    # Check format: 1,234.56 vs 1.234,56
+                    if ',' in val_str and '.' in val_str:
+                         if val_str.find('.') < val_str.find(','): # 1.234,56
+                             price = float(val_str.replace('.', '').replace(',', '.'))
+                         else: # 1,234.56
+                             price = float(val_str.replace(',', ''))
+                    elif ',' in val_str: # 123,45
+                         price = float(val_str.replace(',', '.'))
+                    else:
+                         price = float(val_str)
+                except:
+                    pass
                 
             if self.parent_app and self.parent_app.cost_tab:
                 success = self.parent_app.cost_tab.add_item_from_external(

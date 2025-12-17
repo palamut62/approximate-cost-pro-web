@@ -361,7 +361,7 @@ class ProjectManagerDialog(QDialog):
             }
             QPushButton:hover { background-color: #5E35B1; }
         """)
-        self.select_btn.clicked.connect(self.select_project)
+        self.select_btn.clicked.connect(self.select_and_close)
         bottom_layout.addWidget(self.select_btn)
         
         layout.addLayout(bottom_layout)
@@ -690,9 +690,13 @@ class CostEstimator(QWidget):
         try:
             # Önce temizle
             text = str(text).strip()
-            # 1.234,56 -> 1234.56
+            # 1.234,56 -> 1234.56 (TR)
+            # 1,234.56 -> 1234.56 (US)
             if ',' in text and '.' in text:
-                text = text.replace('.', '').replace(',', '.')
+                if text.find('.') < text.find(','): # TR: Dot comes before Comma
+                    text = text.replace('.', '').replace(',', '.')
+                else: # US: Comma comes before Dot
+                    text = text.replace(',', '')
             elif ',' in text:
                 text = text.replace(',', '.')
             return float(text)

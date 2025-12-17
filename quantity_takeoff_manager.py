@@ -1,14 +1,71 @@
 
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QTableWidget, QTableWidgetItem, 
+from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+                             QPushButton, QTableWidget, QTableWidgetItem,
                              QHeaderView, QLineEdit, QGroupBox, QFormLayout,
                              QDoubleSpinBox, QMessageBox, QComboBox, QInputDialog, QDialog,
-                             QDialogButtonBox, QPlainTextEdit, QMenu, QSplitter, QTextEdit)
+                             QDialogButtonBox, QPlainTextEdit, QMenu, QSplitter, QTextEdit,
+                             QApplication)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont
 from database import DatabaseManager
 import json
 import requests
 import re
+
+
+class ErrorDialog(QDialog):
+    """Kopyalanabilir hata mesajı gösteren dialog"""
+    def __init__(self, parent=None, title="Hata", message=""):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumSize(500, 300)
+        self.setup_ui(message)
+
+    def setup_ui(self, message):
+        layout = QVBoxLayout(self)
+
+        # Hata ikonu ve başlık
+        header = QLabel("❌ Bir hata oluştu:")
+        header.setStyleSheet("font-weight: bold; font-size: 12pt; color: #D32F2F;")
+        layout.addWidget(header)
+
+        # Kopyalanabilir hata mesajı
+        self.error_text = QPlainTextEdit()
+        self.error_text.setPlainText(message)
+        self.error_text.setReadOnly(True)
+        self.error_text.setFont(QFont("Consolas", 9))
+        self.error_text.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #FFEBEE;
+                border: 1px solid #EF9A9A;
+                border-radius: 4px;
+                padding: 8px;
+            }
+        """)
+        layout.addWidget(self.error_text)
+
+        # Butonlar
+        btn_layout = QHBoxLayout()
+
+        copy_btn = QPushButton("📋 Kopyala")
+        copy_btn.clicked.connect(self.copy_error)
+        copy_btn.setStyleSheet("background-color: #2196F3; color: white; padding: 8px 16px;")
+        btn_layout.addWidget(copy_btn)
+
+        btn_layout.addStretch()
+
+        close_btn = QPushButton("Kapat")
+        close_btn.clicked.connect(self.accept)
+        close_btn.setStyleSheet("padding: 8px 16px;")
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def copy_error(self):
+        clipboard = QApplication.clipboard()
+        clipboard.setText(self.error_text.toPlainText())
+        QMessageBox.information(self, "Kopyalandı", "Hata mesajı panoya kopyalandı.")
+
 
 class AIPromptDialog(QDialog):
     def __init__(self, parent=None, title="AI Asistan", label="Talep:"):
@@ -52,66 +109,62 @@ class AITakeoffThread(QThread):
     def run(self):
         prompt = f"""
         Sen uzman bir inşaat metraj mühendisisin.
-        Görev: Verilen metinden imalat gruplarını ve bu gruplara ait DETAYLI malzeme metrajlarını (Beton, Kalıp, Demir vb.) çıkar.
+        Görev: Verilen metinden TEK BİR İMALAT GRUBU oluştur ve bu gruba ait TÜM MALZEME METRAJLARINI (Beton, Kalıp, Demir, Kazı, Dolgu vb.) hesapla.
 
         Metin: "{self.text}"
 
-        Kurallar ve Hesaplama Mantığı:
-        
-        **GENEL YAPI ELEMANLARI:**
-        1. **Beton (m3):** Hacim.
-        2. **Kalıp (m2):** Temas yüzey alanı.
-        3. **Demir (ton):** Ort. 80-100 kg/m3.
-        
-        **ÖZEL ALTYAPI VE KANAL İMALATLARI (Kullanıcı tarifine göre uygula):**
-        
-        **1) Betonarme U Kanal:**
-         - **Taban Betonu:** L x b(iç) x t1(taban_kalınlık).
-         - **Yan Duvar Betonu:** L x h(iç) x t2(duvar_kalınlık) x 2.
-         - **Kalıp (İç+Dış):** 4 x L x h. (Dış yüzeyin de kalıplandığını varsay).
-        
-        **2) Betonarme İstinat Duvarı:**
-         - **Gövde Betonu:** L x H x t(gövde).
-         - **Taban Betonu:** L x B(taban_genişlik) x t0(taban_kalınlık).
-         - **Kalıp (Gövde Ön+Arka):** 2 x L x H.
-        
-        **3) Trapez Kanal (Toprak/Beton):**
-         - **Kazı (m3):** A_kesit = (b + B)/2 * h. V = A * L. (B = b + 2*h*m).
-         - **Kaplama Betonu (m3):** A_kaplama * kalınlık.
-           (A_kaplama = L*b + 2*L * sqrt(h^2 + (h*m)^2)).
-        
-        **4) Taş Duvar:**
-         - **Hacim (m3):** L x H x Ortalama_Kalınlık.
-         - **Harpuşta (m3):** L x w x t.
-        
-        **5) Korkuluk:**
-         - **Korkuluk (m):** Hat uzunluğu.
-         - **Dikme (Adet):** (L / aralık) + 1.
+        **ÖNEMLİ KURALLAR:**
+        1. SADECE TEK BİR GRUP oluştur (örn: "Betonarme U Kanal", "İstinat Duvarı" vb.)
+        2. Bu grubun altında TÜM malzeme metrajlarını ayrı satırlar olarak listele
+        3. Her malzeme için: Beton, Kalıp, Demir, Kazı, Dolgu, vb. ayrı satır olacak
 
-        İstenen Çıktı Formatı (JSON Object):
+        **HESAPLAMA KURALLARI:**
+
+        **Betonarme U Kanal (iç_genişlik: b, iç_yükseklik: h, duvar_kalınlık: t, taban_kalınlık: t0, uzunluk: L):**
+        - Taban Betonu (m3): L × (b + 2×t) × t0
+        - Yan Duvar Betonu (m3): L × t × h × 2
+        - Toplam Beton (m3): Taban + Yan Duvarlar
+        - İç Kalıp (m2): L × (b + 2×h) (taban + 2 yan iç yüzey)
+        - Dış Kalıp (m2): L × 2 × h (2 yan dış yüzey)
+        - Demir (ton): Toplam Beton × 0.10 (100 kg/m3)
+        - Kazı (m3): L × (b + 2×t + 0.5) × (h + t0 + 0.3) (çalışma payı dahil)
+        - Geri Dolgu (m3): Kazı - Beton hacmi
+
+        **Betonarme İstinat Duvarı:**
+        - Gövde Betonu (m3): L × H × t
+        - Taban Betonu (m3): L × B × t0
+        - Kalıp (m2): 2 × L × H (ön + arka yüzey)
+        - Demir (ton): Toplam Beton × 0.10
+
+        **Taş Duvar:**
+        - Duvar Hacmi (m3): L × H × t
+        - Harpuşta (m3): L × genişlik × kalınlık
+
+        **ÇIKTI FORMATI (JSON):**
         {{
-          "explanation": "Buraya hesaplama mantığını ve kabul edilen varsayımları detaylıca yaz. Örn: 'İstinat duvarı için L=50m H=3m kabul edilmiştir...'",
+          "explanation": "Hesaplama detayları ve varsayımlar. Örn: U Kanal için L=1m, iç genişlik=3m, iç yükseklik=2m, duvar kalınlığı=0.3m, taban kalınlığı=0.5m kabul edilmiştir. Taban betonu: 1×(3+0.6)×0.5=1.8m3...",
           "groups": [
               {{
-                "group_name": "Grup Adı (Örn: İstinat Duvarı)",
-                "unit": "", 
+                "group_name": "İmalat Adı (örn: Betonarme U Kanal)",
+                "unit": "",
                 "items": [
-                  {{
-                    "description": "Örn: İstinat Gövde Betonu",
-                    "similar_count": 1,
-                    "length": 50.0,
-                    "width": 0.50,
-                    "height": 3.00,
-                    "quantity": 75.0,
-                    "unit": "m3",
-                    "notes": "50x3x0.5"
-                  }}
+                  {{"description": "Taban Betonu", "similar_count": 1, "length": 1.0, "width": 3.6, "height": 0.5, "quantity": 1.8, "unit": "m3", "notes": "L×(b+2t)×t0 = 1×3.6×0.5"}},
+                  {{"description": "Yan Duvar Betonu", "similar_count": 2, "length": 1.0, "width": 0.3, "height": 2.0, "quantity": 1.2, "unit": "m3", "notes": "L×t×h×2 = 1×0.3×2×2"}},
+                  {{"description": "İç Kalıp", "similar_count": 1, "length": 1.0, "width": 7.0, "height": 1.0, "quantity": 7.0, "unit": "m2", "notes": "L×(b+2h) = 1×(3+4)"}},
+                  {{"description": "Dış Kalıp", "similar_count": 2, "length": 1.0, "width": 2.0, "height": 1.0, "quantity": 4.0, "unit": "m2", "notes": "L×h×2 = 1×2×2"}},
+                  {{"description": "Betonarme Demiri", "similar_count": 1, "length": 1.0, "width": 1.0, "height": 1.0, "quantity": 0.30, "unit": "ton", "notes": "Toplam beton × 0.10"}},
+                  {{"description": "Kazı", "similar_count": 1, "length": 1.0, "width": 4.1, "height": 2.8, "quantity": 11.48, "unit": "m3", "notes": "Çalışma payı dahil"}},
+                  {{"description": "Geri Dolgu", "similar_count": 1, "length": 1.0, "width": 1.0, "height": 1.0, "quantity": 8.48, "unit": "m3", "notes": "Kazı - Beton"}}
                 ]
               }}
           ]
         }}
-        
-        Tek bir JSON nesnesi döndür. "explanation" alanı ZORUNLUDUR.
+
+        **DİKKAT:**
+        - SADECE 1 GRUP olacak, birden fazla grup OLUŞTURMA
+        - Her malzeme türü (beton, kalıp, demir, kazı, dolgu) ayrı bir satır/item olacak
+        - Hesaplamaları "notes" alanında göster
+        - "explanation" alanı ZORUNLU ve detaylı olmalı
         """
 
         if self.provider == "Google Gemini":
@@ -178,10 +231,10 @@ class AITakeoffThread(QThread):
             ],
             "temperature": 0.1,
             "transforms": ["middle-out"],
-            "max_tokens": 2000
+            "max_tokens": 4000
         }
-        
-        response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=45)
+
+        response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=60)
         
         if response.status_code != 200:
             raise Exception(f"API Hatası ({response.status_code}): {response.text}")
@@ -201,12 +254,12 @@ class AITakeoffThread(QThread):
             }],
             "generationConfig": {
                 "temperature": 0.1,
-                "maxOutputTokens": 2000,
+                "maxOutputTokens": 4000,
                 "responseMimeType": "application/json"
             }
         }
-        
-        response = requests.post(url, json=data, timeout=45)
+
+        response = requests.post(url, json=data, timeout=60)
         
         if response.status_code != 200:
             raise Exception(f"Gemini API Hatası ({response.status_code}): {response.text}")
@@ -220,11 +273,11 @@ class AITakeoffThread(QThread):
 
     def process_response(self, raw_content):
         content = raw_content.strip()
-        
+
         # Attempt to find JSON object structure
         start = content.find('{')
         end = content.rfind('}')
-        
+
         if start != -1 and end != -1:
             content = content[start:end+1]
         else:
@@ -232,31 +285,61 @@ class AITakeoffThread(QThread):
 
         try:
             items = json.loads(content)
-            
+
             # Robust extraction of explanation if available
             explanation = ""
             if isinstance(items, dict):
                 explanation = items.get("explanation", "")
-                
+
             self.finished.emit(items, explanation, "")
         except json.JSONDecodeError as json_err:
             try:
-                # Common fix cleanup
-                corrected = re.sub(r',\s*}', '}', content)
-                corrected = re.sub(r',\s*]', ']', corrected)
+                # Kesilmiş JSON'u onarma denemesi
+                corrected = self._repair_truncated_json(content)
                 items = json.loads(corrected)
-                
+
                 explanation = ""
                 if isinstance(items, dict):
                     explanation = items.get("explanation", "")
-                    
+
                 self.finished.emit(items, explanation, "")
             except:
                 error_msg = f"JSON Ayrıştırma Hatası: {str(json_err)}\n\nGelen Veri: {raw_content[:200]}..."
                 self.finished.emit({}, "", error_msg)
-        
+
         except Exception as e:
             self.finished.emit({}, "", f"İşlem Hatası: {str(e)}")
+
+    def _repair_truncated_json(self, content):
+        """Kesilmiş JSON'u onarmaya çalış"""
+        # Trailing comma temizliği
+        corrected = re.sub(r',\s*}', '}', content)
+        corrected = re.sub(r',\s*]', ']', corrected)
+
+        # Kesilmiş string'i kapat
+        # Son açık tırnak var mı kontrol et
+        quote_count = corrected.count('"')
+        if quote_count % 2 != 0:
+            # Tek sayıda tırnak var, string kesilmiş
+            # Kesilmiş string'i kapat
+            corrected = corrected.rstrip()
+            if not corrected.endswith('"'):
+                corrected += '..."'
+
+        # Eksik kapanış parantezlerini say ve ekle
+        open_braces = corrected.count('{') - corrected.count('}')
+        open_brackets = corrected.count('[') - corrected.count(']')
+
+        # Önce trailing virgül varsa kaldır
+        corrected = corrected.rstrip()
+        if corrected.endswith(','):
+            corrected = corrected[:-1]
+
+        # Eksik kapanışları ekle
+        corrected += ']' * open_brackets
+        corrected += '}' * open_braces
+
+        return corrected
 
 class TakeoffEditDialog(QDialog):
     def __init__(self, parent=None, takeoff_data=None):
@@ -558,10 +641,10 @@ class QuantityTakeoffManager(QWidget):
         
         group_id = int(self.group_table.item(row, 0).text())
         
-        # Get extra details from DB (user_prompt, methodology)
+        # Get extra details from DB (user_prompt, methodology, score)
         conn = self.db.get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT user_prompt, methodology FROM quantity_groups WHERE id=?", (group_id,))
+        cursor.execute("SELECT user_prompt, methodology, score FROM quantity_groups WHERE id=?", (group_id,))
         result = cursor.fetchone()
         conn.close()
         
@@ -570,6 +653,7 @@ class QuantityTakeoffManager(QWidget):
             
         user_prompt = result[0] if result[0] else "Kayıt bulunamadı."
         methodology = result[1] if result[1] else "Hesaplama detayları kaydedilmemiş (Eski sürüm verisi)."
+        group_score = result[2] # Can be None or int
         
         dialog = QDialog(self)
         dialog.setWindowTitle("İstek ve Hesaplama Detayları")
@@ -577,22 +661,81 @@ class QuantityTakeoffManager(QWidget):
         
         layout = QVBoxLayout(dialog)
         
-        layout.addWidget(QLabel("<b>👤 Kullanıcı İsteği:</b>"))
+        # Splitter for prompt and methodology
+        splitter = QSplitter(Qt.Vertical)
+        
+        # Top Panel: User Prompt
+        prompt_widget = QWidget()
+        prompt_layout = QVBoxLayout(prompt_widget)
+        prompt_layout.setContentsMargins(0, 0, 0, 0)
+        prompt_layout.addWidget(QLabel("<b>👤 Kullanıcı İsteği:</b>"))
+        
         prompt_text = QTextEdit()
         prompt_text.setReadOnly(True)
         prompt_text.setText(user_prompt)
-        layout.addWidget(prompt_text)
+        prompt_layout.addWidget(prompt_text)
         
-        layout.addWidget(QLabel("<b>🤖 AI Hesaplama Mantığı & Varsayımlar:</b>"))
-        method_text = QTextEdit()
-        method_text.setReadOnly(True)
-        method_text.setText(methodology)
-        layout.addWidget(method_text)
+        splitter.addWidget(prompt_widget)
         
-        btn = QPushButton("Kapat")
-        btn.clicked.connect(dialog.accept)
-        layout.addWidget(btn)
+        # Bottom Panel: Methodology
+        methodology_widget = QWidget()
+        methodology_layout = QVBoxLayout(methodology_widget)
+        methodology_layout.setContentsMargins(0, 0, 0, 0)
+        methodology_layout.addWidget(QLabel("<b>🤖 AI Hesaplama Mantığı & Varsayımlar:</b>"))
         
+        methodology_text = QTextEdit()
+        methodology_text.setReadOnly(True)
+        if methodology:
+             methodology_text.setPlainText(methodology)
+        else:
+             methodology_text.setPlaceholderText("Methodoloji bilgisi bulunamadı.")
+        methodology_layout.addWidget(methodology_text)
+        
+        splitter.addWidget(methodology_widget)
+
+        layout.addWidget(splitter)
+        
+        # --- Scoring Section ---
+        score_layout = QHBoxLayout()
+        score_layout.addWidget(QLabel("<b>AI Cevap Puanı:</b>"))
+        
+        score_combo = QComboBox()
+        score_combo.addItems(["Seçiniz", "⭐ 1 - Kötü", "⭐⭐ 2 - Zayıf", "⭐⭐⭐ 3 - Orta", "⭐⭐⭐⭐ 4 - İyi", "⭐⭐⭐⭐⭐ 5 - Mükemmel"])
+        
+        # Load current score
+        if group_score is not None:
+            try:
+                score_val = int(group_score)
+                if 1 <= score_val <= 5:
+                    score_combo.setCurrentIndex(score_val)
+            except:
+                pass
+                
+        score_layout.addWidget(score_combo)
+        
+        save_score_btn = QPushButton("Puanı Kaydet")
+        save_score_btn.setStyleSheet("background-color: #FFC107; font-weight: bold;")
+        score_layout.addWidget(save_score_btn)
+        
+        layout.addLayout(score_layout)
+        
+        def save_score():
+            idx = score_combo.currentIndex()
+            if idx == 0:
+                QMessageBox.warning(dialog, "Uyarı", "Lütfen bir puan seçin.")
+                return
+            
+            score_val = idx 
+            self.db.update_quantity_group_score(group_id, score_val)
+            QMessageBox.information(dialog, "Başarılı", "Puan kaydedildi.")
+            
+        save_score_btn.clicked.connect(save_score)
+
+        # Close button
+        btn_box = QDialogButtonBox(QDialogButtonBox.Close)
+        btn_box.rejected.connect(dialog.reject)
+        layout.addWidget(btn_box)
+
         dialog.exec_()
 
     def start_ai_takeoff(self):
@@ -636,11 +779,13 @@ class QuantityTakeoffManager(QWidget):
     def on_ai_finished(self, data, explanation, error):
         self.ai_btn.setEnabled(True)
         self.ai_btn.setText("🤖 Yapay Zeka ile İmalat Ekle")
-        
+
         if error:
-            QMessageBox.critical(self, "Hata", error)
+            # Kopyalanabilir hata dialogu göster
+            dialog = ErrorDialog(self, "AI İşlem Hatası", error)
+            dialog.exec_()
             return
-            
+
         if not data or 'groups' not in data:
             QMessageBox.warning(self, "Uyarı", "Veri çözümlenemedi!")
             return

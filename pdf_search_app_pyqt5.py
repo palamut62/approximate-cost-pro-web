@@ -1098,10 +1098,16 @@ class LoadingThread(QThread):
         super().__init__()
         self.search_engine = search_engine
         self.files = files
+        self._stop_requested = False
+
+    def stop(self):
+        self._stop_requested = True
 
     def run(self):
         loaded_count = 0
         for i, file_path in enumerate(self.files):
+            if self._stop_requested:
+                break
             try:
                 file_name = Path(file_path).name
                 self.progress_signal.emit(file_name, i + 1, len(self.files))
@@ -1124,6 +1130,10 @@ class PozAnalyzer(QThread):
         super().__init__()
         self.analiz_folder = Path(analiz_folder)
         self.poz_analyses = {}
+        self._stop_requested = False
+
+    def stop(self):
+        self._stop_requested = True
 
     def run(self):
         """PDF'leri analiz et"""
@@ -1137,6 +1147,8 @@ class PozAnalyzer(QThread):
         self.progress.emit(f"Bulunan {len(pdf_files)} PDF analiz ediliyor...")
 
         for pdf_file in pdf_files:
+            if self._stop_requested:
+                break
             self.progress.emit(f"İşleniyor: {pdf_file.name}")
             self._extract_from_pdf(str(pdf_file))
 
@@ -1404,6 +1416,10 @@ class CSVLoaderThread(QThread):
     def __init__(self, csv_folder):
         super().__init__()
         self.csv_folder = csv_folder
+        self._stop_requested = False
+
+    def stop(self):
+        self._stop_requested = True
 
     def run(self):
         try:
@@ -1418,6 +1434,8 @@ class CSVLoaderThread(QThread):
                 return
 
             for csv_path in csv_files:
+                if self._stop_requested:
+                    break
                 try:
                     df = pd.read_csv(csv_path, encoding='utf-8-sig')
                     
@@ -1472,6 +1490,10 @@ class ExtractorWorkerThread(QThread):
     def __init__(self):
         super().__init__()
         self.pdf_folder = Path(__file__).parent / "PDF"
+        self._stop_requested = False
+
+    def stop(self):
+        self._stop_requested = True
 
     def run(self):
         try:
@@ -1491,6 +1513,8 @@ class ExtractorWorkerThread(QThread):
             total_files = len(pdf_files)
 
             for idx, pdf_file in enumerate(pdf_files):
+                if self._stop_requested:
+                    break
                 try:
                     self.progress.emit(f"İşleniyor: {pdf_file.name}", int(20 + (70 * idx / total_files)))
 
@@ -1526,6 +1550,10 @@ class BackgroundExtractorThread(QThread):
     def __init__(self):
         super().__init__()
         self.pdf_folder = Path(__file__).parent / "PDF"
+        self._stop_requested = False
+
+    def stop(self):
+        self._stop_requested = True
 
     def run(self):
         try:
@@ -1543,6 +1571,8 @@ class BackgroundExtractorThread(QThread):
             total_files = len(pdf_files)
 
             for pdf_file in pdf_files:
+                if self._stop_requested:
+                    break
                 try:
                     results = extractor.extract_poz_from_pdf(str(pdf_file))
                     all_results.extend(results)
@@ -1575,6 +1605,7 @@ class PozViewerWidget(QWidget):
         self.analiz_folder = Path(__file__).parent / "ANALIZ"
         self.parent_app = None  # Ana uygulamaya referans
         self.current_selected_poz = None  # Şu anda seçili poz
+        self.analyzer = None  # Thread referansı
         self.setup_ui()
         self.load_analyses()
 
@@ -1738,6 +1769,11 @@ class PozViewerWidget(QWidget):
 
     def load_analyses(self):
         """PDF'lerden analizleri yükle"""
+        # Önceki analyzer thread'i varsa durdur
+        if self.analyzer and self.analyzer.isRunning():
+            self.analyzer.stop()
+            self.analyzer.wait(1000)
+
         self.progress_bar.setVisible(True)
         self.status_label.setText("PDF'ler analiz ediliyor...")
         self.poz_list.clear()
@@ -1746,6 +1782,10 @@ class PozViewerWidget(QWidget):
         self.analyzer.progress.connect(self.on_progress)
         self.analyzer.finished.connect(self.on_analyses_loaded)
         self.analyzer.start()
+
+        # Ana uygulamaya thread'i kaydet (closeEvent için)
+        if self.parent_app and hasattr(self.parent_app, '_active_threads'):
+            self.parent_app._active_threads.append(self.analyzer)
 
     def on_progress(self, message):
         """İlerleme mesajı"""
@@ -2585,10 +2625,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Ayarlar")
         self.setMinimumSize(750, 550)
         from database import DatabaseManager
-        import shutil
         self.db = DatabaseManager()
-
-        # Proje klasörleri
         self.base_dir = Path(__file__).resolve().parent
         self.pdf_folder = self.base_dir / "PDF"
         self.analiz_folder = self.base_dir / "ANALIZ"
@@ -2787,6 +2824,75 @@ class SettingsDialog(QDialog):
         sources_layout.addLayout(bottom_btn_layout)
 
         self.tabs.addTab(sources_tab, "📂 Veri Kaynakları")
+
+        # --- Tab 3: Uygulama Ayarları ---
+        app_tab = QWidget()
+        app_layout = QVBoxLayout(app_tab)
+
+        # Başlangıç Ayarları Grubu
+        startup_group = QGroupBox("🚀 Başlangıç Ayarları")
+        startup_layout = QFormLayout()
+
+        # Açılışta ne yapılacak
+        self.startup_action_combo = QComboBox()
+        self.startup_action_combo.addItems([
+            "Son projeyi otomatik aç",
+            "Yeni proje dialogu göster",
+            "Boş başla (proje seçme)"
+        ])
+        current_startup = self.db.get_setting("startup_action") or "Son projeyi otomatik aç"
+        self.startup_action_combo.setCurrentText(current_startup)
+        startup_layout.addRow("Uygulama açıldığında:", self.startup_action_combo)
+
+        # Son projeyi hatırla
+        self.remember_project_check = QCheckBox("Kapanırken aktif projeyi hatırla")
+        remember_project = self.db.get_setting("remember_last_project")
+        self.remember_project_check.setChecked(remember_project != "false")
+        startup_layout.addRow("", self.remember_project_check)
+
+        startup_group.setLayout(startup_layout)
+        app_layout.addWidget(startup_group)
+
+        # Görünüm Ayarları Grubu
+        appearance_group = QGroupBox("🎨 Görünüm Ayarları")
+        appearance_layout = QFormLayout()
+
+        # Status bar'da proje bilgisi göster
+        self.show_project_statusbar_check = QCheckBox("Status bar'da aktif proje bilgisini göster")
+        show_project = self.db.get_setting("show_project_in_statusbar")
+        self.show_project_statusbar_check.setChecked(show_project != "false")
+        appearance_layout.addRow("", self.show_project_statusbar_check)
+
+        # Pencere boyutunu hatırla
+        self.remember_window_size_check = QCheckBox("Pencere boyutunu ve konumunu hatırla")
+        remember_size = self.db.get_setting("remember_window_geometry")
+        self.remember_window_size_check.setChecked(remember_size == "true")
+        appearance_layout.addRow("", self.remember_window_size_check)
+
+        appearance_group.setLayout(appearance_layout)
+        app_layout.addWidget(appearance_group)
+
+        # Onay Ayarları Grubu
+        confirm_group = QGroupBox("⚠️ Onay Ayarları")
+        confirm_layout = QFormLayout()
+
+        # Kapatırken onay sor
+        self.confirm_exit_check = QCheckBox("Uygulamayı kapatırken onay iste")
+        confirm_exit = self.db.get_setting("confirm_on_exit")
+        self.confirm_exit_check.setChecked(confirm_exit == "true")
+        confirm_layout.addRow("", self.confirm_exit_check)
+
+        # Proje silmeden önce onay
+        self.confirm_delete_check = QCheckBox("Proje/veri silmeden önce onay iste")
+        confirm_delete = self.db.get_setting("confirm_on_delete")
+        self.confirm_delete_check.setChecked(confirm_delete != "false")
+        confirm_layout.addRow("", self.confirm_delete_check)
+
+        confirm_group.setLayout(confirm_layout)
+        app_layout.addWidget(confirm_group)
+
+        app_layout.addStretch()
+        self.tabs.addTab(app_tab, "⚙️ Uygulama Ayarları")
 
         layout.addWidget(self.tabs)
 
@@ -3005,10 +3111,18 @@ class SettingsDialog(QDialog):
         self.db.set_setting("openrouter_model", model)
         self.db.set_setting("openrouter_base_url", base_url)
         self.db.set_setting("ai_provider", provider)
-        
+
         # Save Gemini settings
         self.db.set_setting("gemini_api_key", self.gemini_key_input.text().strip())
         self.db.set_setting("gemini_model", self.gemini_model_input.currentText().strip())
+
+        # Save App settings
+        self.db.set_setting("startup_action", self.startup_action_combo.currentText())
+        self.db.set_setting("remember_last_project", "true" if self.remember_project_check.isChecked() else "false")
+        self.db.set_setting("show_project_in_statusbar", "true" if self.show_project_statusbar_check.isChecked() else "false")
+        self.db.set_setting("remember_window_geometry", "true" if self.remember_window_size_check.isChecked() else "false")
+        self.db.set_setting("confirm_on_exit", "true" if self.confirm_exit_check.isChecked() else "false")
+        self.db.set_setting("confirm_on_delete", "true" if self.confirm_delete_check.isChecked() else "false")
 
         QMessageBox.information(self, "Başarılı", "Ayarlar kaydedildi.")
         self.accept()
@@ -3020,6 +3134,9 @@ class PDFSearchAppPyQt5(QMainWindow):
         self.csv_manager = CSVDataManager()  # CSV manager init (empty)
         self.current_results = []
         self.loading_thread = None
+        self.csv_loader = None
+        self.extractor_thread = None
+        self._active_threads = []  # Aktif thread'leri takip et
         self.internal_pdf_dir = Path(__file__).resolve().parent / "PDF"
         self.analiz_dir = Path(__file__).resolve().parent / "ANALIZ"
 
@@ -3043,6 +3160,8 @@ class PDFSearchAppPyQt5(QMainWindow):
 
         self.csv_selected_pozlar = []  # Initialize selected poz list
 
+        self.current_project_id = None  # Aktif proje ID'si
+
         # Dosya değişiklik bilgisi
         self.changed_files = []
         self.missing_files = []
@@ -3056,6 +3175,13 @@ class PDFSearchAppPyQt5(QMainWindow):
 
         # Status Bar Setup
         self.status_bar = self.statusBar()
+        
+        # Project Label
+        self.project_status_label = QLabel("Proje: Seçili Değil")
+        self.project_status_label.setStyleSheet("color: #333; margin-right: 20px;")
+        self.status_bar.addPermanentWidget(self.project_status_label)
+
+        # AI Model Label
         self.model_status_label = QLabel("AI Model: -")
         self.model_status_label.setStyleSheet("color: #333; font-weight: bold; margin-right: 10px;")
         self.status_bar.addPermanentWidget(self.model_status_label)
@@ -3066,19 +3192,144 @@ class PDFSearchAppPyQt5(QMainWindow):
         # Uygulama tamamen açıldıktan 500ms sonra yüklemeye başla
         self.scan_timer.start(500)
 
+        # Başlangıç ayarlarına göre proje yükle
+        QTimer.singleShot(600, self.handle_startup_project)
+
     def update_ai_status(self):
         """Update AI Status Bar"""
         provider = self.db.get_setting("ai_provider") or "OpenRouter"
-        
+
         if provider == "Google Gemini":
             model = self.db.get_setting("gemini_model")
         else:
             model = self.db.get_setting("openrouter_model")
-            
+
         if not model:
             model = "Seçilmedi"
-            
+
         self.model_status_label.setText(f"AI: {provider} ({model})")
+
+    def handle_startup_project(self):
+        """Başlangıç ayarlarına göre proje yükle"""
+        startup_action = self.db.get_setting("startup_action") or "Son projeyi otomatik aç"
+
+        if startup_action == "Son projeyi otomatik aç":
+            # Son projeyi yükle
+            last_project_id = self.db.get_setting("last_project_id")
+            if last_project_id:
+                try:
+                    project_id = int(last_project_id)
+                    project = self.db.get_project(project_id)
+                    if project:
+                        self.current_project_id = project_id
+                        self.update_project_status()
+                        self.load_project_data()
+                except (ValueError, Exception):
+                    pass
+
+        elif startup_action == "Yeni proje dialogu göster":
+            # Yeni proje dialogunu göster
+            QTimer.singleShot(100, self.show_new_project_dialog)
+
+        # "Boş başla" seçeneği için bir şey yapmıyoruz
+
+    def show_new_project_dialog(self):
+        """Yeni proje dialogunu göster"""
+        if hasattr(self, 'create_new_project'):
+            self.create_new_project()
+
+    def update_project_status(self):
+        """Status bar'da proje bilgisini güncelle"""
+        # project_status_label henüz oluşturulmamış olabilir
+        if not hasattr(self, 'project_status_label'):
+            return
+
+        show_project = self.db.get_setting("show_project_in_statusbar")
+        if show_project == "false":
+            self.project_status_label.setVisible(False)
+            return
+
+        self.project_status_label.setVisible(True)
+
+        if self.current_project_id:
+            project = self.db.get_project(self.current_project_id)
+            if project:
+                self.project_status_label.setText(f"📁 Proje: {project['name']}")
+                self.project_status_label.setStyleSheet("color: #1565C0; font-weight: bold; margin-right: 20px;")
+            else:
+                self.project_status_label.setText("Proje: Seçili Değil")
+                self.project_status_label.setStyleSheet("color: #333; margin-right: 20px;")
+        else:
+            self.project_status_label.setText("Proje: Seçili Değil")
+            self.project_status_label.setStyleSheet("color: #333; margin-right: 20px;")
+
+    def load_project_data(self):
+        """Proje verilerini yükle"""
+        # Bu metod projeye özel verileri yüklemek için kullanılır
+        # Alt sınıflar veya bileşenler tarafından override edilebilir
+        pass
+
+    def closeEvent(self, event):
+        """Uygulama kapatılırken tüm thread'leri düzgün sonlandır"""
+        # Kapatma onayı kontrolü
+        confirm_exit = self.db.get_setting("confirm_on_exit")
+        if confirm_exit == "true":
+            reply = QMessageBox.question(
+                self,
+                "Çıkış Onayı",
+                "Uygulamayı kapatmak istediğinizden emin misiniz?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply == QMessageBox.No:
+                event.ignore()
+                return
+
+        # Son projeyi kaydet
+        remember_project = self.db.get_setting("remember_last_project")
+        if remember_project != "false" and self.current_project_id:
+            self.db.set_setting("last_project_id", str(self.current_project_id))
+
+        # Pencere geometrisini kaydet
+        remember_geometry = self.db.get_setting("remember_window_geometry")
+        if remember_geometry == "true":
+            geometry = self.geometry()
+            self.db.set_setting("window_x", str(geometry.x()))
+            self.db.set_setting("window_y", str(geometry.y()))
+            self.db.set_setting("window_width", str(geometry.width()))
+            self.db.set_setting("window_height", str(geometry.height()))
+
+        # Çalışan tüm thread'leri durdur
+        threads_to_stop = []
+
+        if self.loading_thread and self.loading_thread.isRunning():
+            threads_to_stop.append(self.loading_thread)
+        if self.csv_loader and self.csv_loader.isRunning():
+            threads_to_stop.append(self.csv_loader)
+        if self.extractor_thread and self.extractor_thread.isRunning():
+            threads_to_stop.append(self.extractor_thread)
+
+        # Aktif thread listesinden de kontrol et
+        for thread in self._active_threads:
+            if thread and thread.isRunning():
+                threads_to_stop.append(thread)
+
+        # Tüm thread'lere stop sinyali gönder
+        for thread in threads_to_stop:
+            if hasattr(thread, 'stop'):
+                thread.stop()
+
+        # Thread'lerin bitmesini bekle (max 2 saniye)
+        for thread in threads_to_stop:
+            thread.wait(2000)
+
+        # Timer'ları durdur
+        if hasattr(self, 'loading_timer') and self.loading_timer.isActive():
+            self.loading_timer.stop()
+        if hasattr(self, 'scan_timer') and self.scan_timer.isActive():
+            self.scan_timer.stop()
+
+        event.accept()
 
     def start_delayed_loading(self):
         """Ağır yükleme işlemlerini başlat"""
@@ -3106,8 +3357,22 @@ class PDFSearchAppPyQt5(QMainWindow):
     def setup_ui(self):
         """UI kurulumu"""
         self.setWindowTitle("Yaklaşık Maliyet Pro - Birim Fiyat ve Maliyet Tahmini")
-        self.setGeometry(100, 100, 1400, 900)
-        self.showMaximized()
+
+        # Pencere geometrisini geri yükle veya varsayılan kullan
+        remember_geometry = self.db.get_setting("remember_window_geometry")
+        if remember_geometry == "true":
+            try:
+                x = int(self.db.get_setting("window_x") or 100)
+                y = int(self.db.get_setting("window_y") or 100)
+                w = int(self.db.get_setting("window_width") or 1400)
+                h = int(self.db.get_setting("window_height") or 900)
+                self.setGeometry(x, y, w, h)
+            except (ValueError, TypeError):
+                self.setGeometry(100, 100, 1400, 900)
+                self.showMaximized()
+        else:
+            self.setGeometry(100, 100, 1400, 900)
+            self.showMaximized()
 
         # Ana widget
         central_widget = QWidget()
@@ -3297,11 +3562,11 @@ class PDFSearchAppPyQt5(QMainWindow):
         
         # Kayıtlı Pozlar ve Analizler (YENİ SEKME)
         self.custom_analysis_tab = CustomAnalysisManager()
-        self.tab_widget.addTab(self.custom_analysis_tab, "Kayıtlı Pozlar ve Analizler")
+        self.tab_widget.addTab(self.custom_analysis_tab, "💾 Kayıtlı Pozlar ve Analizler")
 
         # Tab: Quantity Takeoff (İmalat Metrajları)
         self.takeoff_tab = QuantityTakeoffManager()
-        self.tab_widget.addTab(self.takeoff_tab, "Proje İmalat Metrajı")
+        self.tab_widget.addTab(self.takeoff_tab, "📐 Proje İmalat Metrajı")
         
         # Proje değişikliği sinyalini bağla
         self.cost_tab.project_changed_signal.connect(self.on_project_changed)
@@ -3414,6 +3679,9 @@ class PDFSearchAppPyQt5(QMainWindow):
 
     def on_project_changed(self, project_data):
         """Proje değiştiğinde çağrılır"""
+        # Proje ID'sini güncelle
+        self.current_project_id = project_data.get('id') if project_data else None
+
         if project_data and project_data.get('name'):
             self.project_name_label.setText(project_data.get('name', 'İsimsiz Proje'))
             self.project_employer_label.setText(f"İşveren: {project_data.get('employer', '-') or '-'}")
@@ -3448,6 +3716,10 @@ class PDFSearchAppPyQt5(QMainWindow):
         if hasattr(self, 'close_proj_btn'):
             self.close_proj_btn.setVisible(has_project)
         
+        # Status bar'ı güncelle
+        self.update_project_status()
+        
+        # Switch to project tab:
         if not has_project:
              # Eğer proje yoksa Hakkımda sekmesine git
             self.tab_widget.setCurrentIndex(0)
@@ -3455,7 +3727,8 @@ class PDFSearchAppPyQt5(QMainWindow):
     def open_settings(self):
         """Ayarlar penceresini aç"""
         dialog = SettingsDialog(self)
-        dialog.exec_()
+        if dialog.exec_() == QDialog.Accepted:
+            self.update_ai_status()
         # Ayarlar kapatıldığında dosya değişikliğini kontrol et
         self.check_file_changes()
 
