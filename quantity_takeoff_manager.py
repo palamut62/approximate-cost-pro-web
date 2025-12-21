@@ -1084,9 +1084,63 @@ class QuantityTakeoffManager(QWidget):
         super().__init__()
         self.db = DatabaseManager()
         self.current_group_id = None
+        self.csv_manager = None  # CSV manager için referans
         self.setup_ui()
         self.refresh_groups()
+        self._init_csv_manager()
         self.ai_thread = None
+
+    def _init_csv_manager(self):
+        """Ana pencereden CSV manager'a erişmeye çalış"""
+        try:
+            main_window = self.parent()
+            while main_window and not hasattr(main_window, 'csv_manager'):
+                main_window = main_window.parent()
+            
+            if main_window and hasattr(main_window, 'csv_manager'):
+                self.csv_manager = main_window.csv_manager
+        except:
+            pass
+
+    def _find_poz_for_item(self, item):
+        """Metraj item'ı için uygun poz bul"""
+        if not self.csv_manager or not hasattr(self.csv_manager, 'poz_data'):
+            return None
+        
+        item_unit = item.get('unit', '').lower()
+        item_desc = item.get('description', '').lower()
+        
+        # Önce birime göre ara
+        best_match = None
+        best_score = 0
+        
+        for poz_no, poz_info in self.csv_manager.poz_data.items():
+            poz_unit = poz_info.get('unit', '').lower()
+            poz_desc = poz_info.get('description', '').lower()
+            
+            score = 0
+            
+            # Birim eşleşmesi (en önemli)
+            if item_unit and poz_unit:
+                if item_unit == poz_unit:
+                    score += 10
+                elif item_unit in poz_unit or poz_unit in item_unit:
+                    score += 5
+            
+            # Açıklama eşleşmesi
+            if item_desc and poz_desc:
+                # Anahtar kelimelere göre eşleşme
+                item_keywords = set(item_desc.split())
+                poz_keywords = set(poz_desc.split())
+                common_keywords = item_keywords.intersection(poz_keywords)
+                if common_keywords:
+                    score += len(common_keywords) * 2
+            
+            if score > best_score:
+                best_score = score
+                best_match = poz_info
+        
+        return best_match
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -1312,6 +1366,14 @@ class QuantityTakeoffManager(QWidget):
         # Metraj detaylarını al
         items = self.db.get_takeoffs_by_group(group_id)
 
+        # Her item için poz bilgisi bul ve ekle
+        for item in items:
+            poz_info = self._find_poz_for_item(item)
+            if poz_info:
+                item['poz_name'] = poz_info.get('poz_no', '')
+            else:
+                item['poz_name'] = item.get('location', item.get('poz', ''))
+
         # İmalat grubu verisi hazırla
         imalat_group = {
             'name': group_info['name'],
@@ -1366,6 +1428,15 @@ class QuantityTakeoffManager(QWidget):
         imalat_groups = []
         for grp in groups:
             items = self.db.get_takeoffs_by_group(grp['id'])
+            
+            # Her item için poz bilgisi bul ve ekle
+            for item in items:
+                poz_info = self._find_poz_for_item(item)
+                if poz_info:
+                    item['poz_name'] = poz_info.get('poz_no', '')
+                else:
+                    item['poz_name'] = item.get('location', item.get('poz', ''))
+            
             imalat_groups.append({
                 'name': grp['name'],
                 'unit': grp['unit'],
@@ -1407,7 +1478,7 @@ class QuantityTakeoffManager(QWidget):
             QMessageBox.critical(self, "Hata", f"PDF oluşturma hatası:\n{str(e)}")
 
     def _get_project_info(self):
-        """Aktif proje bilgilerini döndürür - Yaklaşık maliyet formatıyla uyumlu"""
+        """Aktif proje bilgilerini veritabanından döndürür - Yaklaşık maliyet formatıyla uyumlu"""
         from datetime import datetime
         project_info = {
             'name': 'Yaklaşık Maliyet Projesi',
@@ -1418,21 +1489,40 @@ class QuantityTakeoffManager(QWidget):
             'institution': 'KAMU KURUMU',
         }
 
-        # Ana pencereden proje bilgisi almaya çalış
+        # Ana pencereden cost_tab'a erişip aktif proje ID'sini al
         try:
             main_window = self.parent()
-            while main_window and not hasattr(main_window, 'current_project'):
+            while main_window and not hasattr(main_window, 'cost_tab'):
                 main_window = main_window.parent()
 
-            if main_window and hasattr(main_window, 'current_project') and main_window.current_project:
-                proj = main_window.current_project
-                project_info['name'] = proj.get('name', project_info['name'])
-                project_info['employer'] = proj.get('employer', proj.get('institution', project_info['employer']))
-                project_info['contractor'] = proj.get('contractor', project_info['contractor'])
-                project_info['location'] = proj.get('location', project_info['location'])
-                project_info['institution'] = proj.get('institution', project_info['institution'])
-        except:
-            pass
+            if main_window and hasattr(main_window, 'cost_tab'):
+                cost_tab = main_window.cost_tab
+                if hasattr(cost_tab, 'current_project_id') and cost_tab.current_project_id:
+                    # Veritabanından proje bilgilerini çek
+                    project = self.db.get_project(cost_tab.current_project_id)
+                    if project:
+                        project_info['name'] = project.get('name', project_info['name'])
+                        project_info['employer'] = project.get('employer', project.get('institution', project_info['employer'])) or '-'
+                        project_info['contractor'] = project.get('contractor', project_info['contractor']) or '-'
+                        project_info['location'] = project.get('location', project_info['location']) or '-'
+                        project_info['institution'] = project.get('institution', project_info['institution']) or 'KAMU KURUMU'
+                        
+                        # Tarih formatını dönüştür (yyyy-MM-dd -> dd.MM.yyyy)
+                        project_date = project.get('project_date', '')
+                        if project_date:
+                            try:
+                                from datetime import datetime as dt
+                                date_obj = dt.strptime(project_date, "%Y-%m-%d")
+                                project_info['date'] = date_obj.strftime("%d.%m.%Y")
+                            except:
+                                pass
+        except Exception as e:
+            print(f"Proje bilgisi alınırken hata: {e}")
+
+        # İşin adını ayarlardan al ve projeye ekle (Override)
+        work_name = self.db.get_setting("work_name")
+        if work_name:
+            project_info['name'] = work_name
 
         return project_info
 

@@ -702,9 +702,10 @@ dâhil, 1 {unit} fiyatı:
         doc.build(elements)
         return True
 
-    def export_metraj_listesi(self, filepath, project_info, groups_with_items):
+    def export_metraj_listesi(self, filepath, project_info, groups_with_items, signatories=None):
         """
         Metraj Listesi (İmalat Grupları ve Detayları) PDF'i oluştur
+        Maliyet Hesabı sekmesindeki PDF formatıyla aynı stil kullanır
         """
         doc = SimpleDocTemplate(
             filepath,
@@ -717,10 +718,39 @@ dâhil, 1 {unit} fiyatı:
 
         elements = []
 
-        # Başlık
-        elements.append(Paragraph("METRAJ LİSTESİ", self.styles['TitleCenter']))
-        elements.append(Paragraph(f"Proje: {project_info.get('name', '-')}", self.styles['SubTitle']))
+        # Başlık - Yaklaşık maliyet formatı
+        title_text = project_info.get('name', 'METRAJ LİSTESİ')
+        if not title_text or title_text == '-':
+            title_text = "METRAJ LİSTESİ"
+
+        elements.append(Paragraph(title_text, self.styles['TitleCenter']))
+        elements.append(Paragraph("(METRAJ LİSTESİ)", self.styles['SubTitle']))
         elements.append(Spacer(1, 0.5*cm))
+
+        # Proje Bilgileri Tablosu - Yaklaşık maliyet formatı
+        project_data = [
+            ["İŞİN ADI", project_info.get('name', '-')],
+            ["İŞVEREN", project_info.get('employer', project_info.get('institution', '-'))],
+            ["YÜKLENİCİ", project_info.get('contractor', '-')],
+            ["YER", project_info.get('location', '-')],
+            ["TARİH", project_info.get('date', datetime.now().strftime("%d.%m.%Y"))],
+        ]
+
+        info_table = Table(project_data, colWidths=[3.5*cm, 14.5*cm])
+        info_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), self.font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('BACKGROUND', (0, 0), (0, -1), colors.Color(0.9, 0.9, 0.9)),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+        ]))
+        elements.append(info_table)
+        elements.append(Spacer(1, 0.7*cm))
 
         for group in groups_with_items:
             # Grup başlığı
@@ -770,8 +800,16 @@ dâhil, 1 {unit} fiyatı:
             elements.append(metraj_table)
             elements.append(Spacer(1, 0.5*cm))
 
+        elements.append(Spacer(1, 0.8*cm))
+
+        # İmza Alanları - Yaklaşık maliyet formatı ile aynı
+        sig_elements = self._create_signature_table(signatories)
+        for elem in sig_elements:
+            elements.append(elem)
+
         # Footer
-        footer_text = f"Bu metraj listesi Yaklaşık Maliyet Pro tarafından {datetime.now().strftime('%d.%m.%Y %H:%M')} tarihinde oluşturulmuştur."
+        elements.append(Spacer(1, 0.5*cm))
+        footer_text = f"Bu belge Yaklaşık Maliyet Pro tarafından {datetime.now().strftime('%d.%m.%Y %H:%M')} tarihinde oluşturulmuştur."
         elements.append(Paragraph(footer_text, self.styles['Footer']))
 
         doc.build(elements)
@@ -801,9 +839,12 @@ dâhil, 1 {unit} fiyatı:
 
             elements = []
 
-            # Başlık - Yaklaşık maliyet formatı
-            imalat_name = imalat_group.get('name', 'İMALAT METRAJ CETVELİ')
-            elements.append(Paragraph(imalat_name, self.styles['TitleCenter']))
+            # Başlık - İşin adı (proje adı)
+            title_text = project_info.get('name', 'İMALAT METRAJ CETVELİ')
+            if not title_text or title_text == '-':
+                title_text = "İMALAT METRAJ CETVELİ"
+            
+            elements.append(Paragraph(title_text, self.styles['TitleCenter']))
             elements.append(Paragraph("(İMALAT METRAJ CETVELİ)", self.styles['SubTitle']))
             elements.append(Spacer(1, 0.5*cm))
 
@@ -838,16 +879,13 @@ dâhil, 1 {unit} fiyatı:
             imalat_unit = imalat_group.get('unit', '')
 
             if items:
-                header = ['S.No', 'Poz/Mahal', 'Tanım', 'Adet', 'Boy', 'En', 'Yük.', 'Miktar', 'Birim']
+                header = ['S.No', 'Tanım', 'Adet', 'Boy', 'En', 'Yük.', 'Miktar', 'Birim']
                 table_data = [header]
 
-                toplam_miktar = 0
                 for i, item in enumerate(items, 1):
                     miktar = item.get('quantity', 0)
-                    toplam_miktar += miktar
                     row = [
                         str(i),
-                        str(item.get('location', item.get('poz', '')))[:15],
                         str(item.get('description', ''))[:40],
                         str(item.get('similar_count', 1)),
                         f"{item.get('length', 0):.2f}",
@@ -858,11 +896,8 @@ dâhil, 1 {unit} fiyatı:
                     ]
                     table_data.append(row)
 
-                # Toplam satırı
-                table_data.append(['', '', '', '', '', '', 'TOPLAM:', f"{toplam_miktar:.3f}", imalat_unit])
-
-                # Sütun genişlikleri (toplam 18cm)
-                col_widths = [1*cm, 2*cm, 5.5*cm, 1.2*cm, 1.5*cm, 1.5*cm, 1.5*cm, 2*cm, 1.8*cm]
+                # Sütun genişlikleri (toplam 18cm) - Poz sütunu kaldırıldı
+                col_widths = [1*cm, 7.5*cm, 1.2*cm, 1.5*cm, 1.5*cm, 1.5*cm, 2*cm, 1.8*cm]
                 metraj_table = Table(table_data, colWidths=col_widths, repeatRows=1)
 
                 metraj_table.setStyle(TableStyle([
@@ -878,17 +913,12 @@ dâhil, 1 {unit} fiyatı:
                     ('FONTNAME', (0, 1), (-1, -1), self.font_name),
                     ('FONTSIZE', (0, 1), (-1, -1), 8),
                     ('ALIGN', (0, 1), (0, -1), 'CENTER'),   # S.No
-                    ('ALIGN', (1, 1), (2, -1), 'LEFT'),     # Poz, Tanım
-                    ('ALIGN', (3, 1), (-1, -1), 'RIGHT'),   # Sayısal değerler
+                    ('ALIGN', (1, 1), (1, -1), 'LEFT'),     # Tanım
+                    ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),   # Sayısal değerler
 
                     # Grid
-                    ('GRID', (0, 0), (-1, -2), 0.5, colors.black),
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
                     ('BOX', (0, 0), (-1, -1), 1, colors.black),
-
-                    # Toplam satırı
-                    ('FONTNAME', (6, -1), (-1, -1), self.font_name),
-                    ('BACKGROUND', (6, -1), (-1, -1), colors.Color(0.95, 0.95, 0.95)),
-                    ('LINEABOVE', (6, -1), (-1, -1), 1, colors.black),
 
                     # Padding
                     ('TOPPADDING', (0, 0), (-1, -1), 3),
@@ -897,7 +927,7 @@ dâhil, 1 {unit} fiyatı:
                     ('RIGHTPADDING', (0, 0), (-1, -1), 4),
 
                     # Alternatif satır renklendirme
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.Color(0.97, 0.97, 0.97)]),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.Color(0.97, 0.97, 0.97)]),
                 ]))
 
                 elements.append(metraj_table)
@@ -955,17 +985,24 @@ dâhil, 1 {unit} fiyatı:
 
             elements = []
 
+            # İlk sayfa için başlık - İşin adı (proje adı)
+            title_text = project_info.get('name', 'İMALAT METRAJ CETVELİ')
+            if not title_text or title_text == '-':
+                title_text = "İMALAT METRAJ CETVELİ"
+            
+            elements.append(Paragraph(title_text, self.styles['TitleCenter']))
+            elements.append(Paragraph("(TÜM İMALAT METRAJ CETVELLERİ)", self.styles['SubTitle']))
+            elements.append(Spacer(1, 0.5*cm))
+
             for idx, imalat_group in enumerate(imalat_groups):
                 if idx > 0:
                     elements.append(PageBreak())
+                    # Her sayfada başlık tekrar göster
+                    elements.append(Paragraph(title_text, self.styles['TitleCenter']))
+                    elements.append(Paragraph(f"(İMALAT METRAJ CETVELİ - Sayfa {idx + 1}/{len(imalat_groups)})", self.styles['SubTitle']))
+                    elements.append(Spacer(1, 0.5*cm))
 
-                # Başlık - Yaklaşık maliyet formatı
-                imalat_name = imalat_group.get('name', 'İMALAT METRAJ CETVELİ')
-                elements.append(Paragraph(imalat_name, self.styles['TitleCenter']))
-                elements.append(Paragraph(f"(İMALAT METRAJ CETVELİ - Sayfa {idx + 1}/{len(imalat_groups)})", self.styles['SubTitle']))
-                elements.append(Spacer(1, 0.5*cm))
-
-                # Proje Bilgileri Tablosu - Yaklaşık maliyet formatı
+                # Proje Bilgileri Tablosu - Yaklaşık maliyet formatı (her sayfada)
                 imalat_unit = imalat_group.get('unit', '')
                 project_data = [
                     ["İŞİN ADI", project_info.get('name', '-')],
@@ -992,20 +1029,31 @@ dâhil, 1 {unit} fiyatı:
                 elements.append(info_table)
                 elements.append(Spacer(1, 0.7*cm))
 
+                # İmalat grubu başlığı ekle
+                imalat_group_name = imalat_group.get('name', 'İmalat Grubu')
+                group_title_style = ParagraphStyle(
+                    name='GroupTitle',
+                    parent=self.styles['Normal'],
+                    fontSize=11,
+                    alignment=TA_LEFT,
+                    fontName=self.font_name,
+                    textColor=colors.darkblue,
+                    spaceAfter=6
+                )
+                elements.append(Paragraph(f"<b>İmalat Grubu: {imalat_group_name}</b>", group_title_style))
+                elements.append(Spacer(1, 0.3*cm))
+
                 # Metraj Tablosu
                 items = imalat_group.get('items', [])
 
                 if items:
-                    header = ['S.No', 'Poz/Mahal', 'Tanım', 'Adet', 'Boy', 'En', 'Yük.', 'Miktar', 'Birim']
+                    header = ['S.No', 'Tanım', 'Adet', 'Boy', 'En', 'Yük.', 'Miktar', 'Birim']
                     table_data = [header]
 
-                    toplam_miktar = 0
                     for i, item in enumerate(items, 1):
                         miktar = item.get('quantity', 0)
-                        toplam_miktar += miktar
                         row = [
                             str(i),
-                            str(item.get('location', item.get('poz', '')))[:15],
                             str(item.get('description', ''))[:40],
                             str(item.get('similar_count', 1)),
                             f"{item.get('length', 0):.2f}",
@@ -1016,11 +1064,8 @@ dâhil, 1 {unit} fiyatı:
                         ]
                         table_data.append(row)
 
-                    # Toplam satırı
-                    table_data.append(['', '', '', '', '', '', 'TOPLAM:', f"{toplam_miktar:.3f}", imalat_unit])
-
-                    # Sütun genişlikleri (toplam 18cm)
-                    col_widths = [1*cm, 2*cm, 5.5*cm, 1.2*cm, 1.5*cm, 1.5*cm, 1.5*cm, 2*cm, 1.8*cm]
+                    # Sütun genişlikleri (toplam 18cm) - Poz sütunu kaldırıldı
+                    col_widths = [1*cm, 7.5*cm, 1.2*cm, 1.5*cm, 1.5*cm, 1.5*cm, 2*cm, 1.8*cm]
                     metraj_table = Table(table_data, colWidths=col_widths, repeatRows=1)
 
                     metraj_table.setStyle(TableStyle([
@@ -1036,17 +1081,12 @@ dâhil, 1 {unit} fiyatı:
                         ('FONTNAME', (0, 1), (-1, -1), self.font_name),
                         ('FONTSIZE', (0, 1), (-1, -1), 8),
                         ('ALIGN', (0, 1), (0, -1), 'CENTER'),   # S.No
-                        ('ALIGN', (1, 1), (2, -1), 'LEFT'),     # Poz, Tanım
-                        ('ALIGN', (3, 1), (-1, -1), 'RIGHT'),   # Sayısal değerler
+                        ('ALIGN', (1, 1), (1, -1), 'LEFT'),     # Tanım
+                        ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),   # Sayısal değerler
 
                         # Grid
-                        ('GRID', (0, 0), (-1, -2), 0.5, colors.black),
+                        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
                         ('BOX', (0, 0), (-1, -1), 1, colors.black),
-
-                        # Toplam satırı
-                        ('FONTNAME', (6, -1), (-1, -1), self.font_name),
-                        ('BACKGROUND', (6, -1), (-1, -1), colors.Color(0.95, 0.95, 0.95)),
-                        ('LINEABOVE', (6, -1), (-1, -1), 1, colors.black),
 
                         # Padding
                         ('TOPPADDING', (0, 0), (-1, -1), 3),
@@ -1055,7 +1095,7 @@ dâhil, 1 {unit} fiyatı:
                         ('RIGHTPADDING', (0, 0), (-1, -1), 4),
 
                         # Alternatif satır renklendirme
-                        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.Color(0.97, 0.97, 0.97)]),
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.Color(0.97, 0.97, 0.97)]),
                     ]))
 
                     elements.append(metraj_table)
