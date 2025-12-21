@@ -73,35 +73,135 @@ class ErrorDialog(QDialog):
 
 
 class AIPromptDialog(QDialog):
-    def __init__(self, parent=None, title="AI Asistan", label="Talep:"):
+    def __init__(self, parent=None, title="AI Asistan", label="Talep:", show_group_selector=False, db=None):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(500, 300)
+        self.resize(550, 400)
+        self.show_group_selector = show_group_selector
+        self.db = db
+        self.selected_group_id = None
+        self.selected_group_details = None
         self.setup_ui(label)
-        
+
     def setup_ui(self, label_text):
         layout = QVBoxLayout(self)
-        
+
+        # İmalat Grubu Seçici (opsiyonel)
+        if self.show_group_selector and self.db:
+            group_box = QGroupBox("📦 İmalat Grubu (Opsiyonel)")
+            group_layout = QVBoxLayout()
+
+            group_info = QLabel("Bir imalat grubu seçerseniz, o grubun metraj detayları AI'ya gönderilecektir.")
+            group_info.setStyleSheet("color: #666; font-size: 9pt;")
+            group_info.setWordWrap(True)
+            group_layout.addWidget(group_info)
+
+            self.group_combo = QComboBox()
+            self.group_combo.addItem("-- Grup Seçilmedi (Genel Analiz) --", None)
+
+            # Grupları yükle
+            groups = self.db.get_quantity_groups()
+            for grp in groups:
+                self.group_combo.addItem(f"📁 {grp['name']} ({grp.get('unit', '')})", grp['id'])
+
+            self.group_combo.currentIndexChanged.connect(self.on_group_changed)
+            group_layout.addWidget(self.group_combo)
+
+            # Metraj önizlemesi
+            self.metraj_preview = QTextEdit()
+            self.metraj_preview.setReadOnly(True)
+            self.metraj_preview.setMaximumHeight(100)
+            self.metraj_preview.setPlaceholderText("Grup seçildiğinde metraj detayları burada görünecek...")
+            self.metraj_preview.setStyleSheet("""
+                QTextEdit {
+                    background-color: #F5F5F5;
+                    border: 1px solid #DDD;
+                    border-radius: 4px;
+                    font-size: 9pt;
+                }
+            """)
+            group_layout.addWidget(self.metraj_preview)
+
+            group_box.setLayout(group_layout)
+            layout.addWidget(group_box)
+
         layout.addWidget(QLabel(label_text))
-        
+
         self.input_text = QPlainTextEdit()
         self.input_text.setPlaceholderText("Buraya detaylıca yazın...")
         self.input_text.setLineWrapMode(QPlainTextEdit.WidgetWidth) # Force wrap
         layout.addWidget(self.input_text)
-        
+
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
-        
+
+    def on_group_changed(self, index):
+        """İmalat grubu değiştiğinde metraj detaylarını göster"""
+        self.selected_group_id = self.group_combo.currentData()
+
+        if not self.selected_group_id or not self.db:
+            self.metraj_preview.clear()
+            self.selected_group_details = None
+            return
+
+        # Grubun metraj detaylarını al
+        takeoffs = self.db.get_takeoffs_by_group(self.selected_group_id)
+
+        if not takeoffs:
+            self.metraj_preview.setText("Bu grupta henüz metraj kaydı yok.")
+            self.selected_group_details = None
+            return
+
+        # Metraj özeti oluştur
+        preview_lines = []
+        for t in takeoffs:
+            line = f"• {t['description']}: {t['quantity']:.2f} {t['unit']}"
+            if t.get('notes'):
+                line += f" ({t['notes']})"
+            preview_lines.append(line)
+
+        self.metraj_preview.setText("\n".join(preview_lines))
+        self.selected_group_details = takeoffs
+
     def get_text(self):
         return self.input_text.toPlainText()
+
+    def get_selected_group_id(self):
+        """Seçilen grup ID'sini döndür"""
+        return self.selected_group_id
+
+    def get_group_metraj_context(self):
+        """Seçilen grubun metraj detaylarını AI context formatında döndür - SINIRLI"""
+        if not self.selected_group_details:
+            return ""
+
+        # Grup adını al
+        group_name = ""
+        if self.show_group_selector and hasattr(self, 'group_combo'):
+            group_name = self.group_combo.currentText().replace("📁 ", "").split(" (")[0]
+
+        context_lines = [f"\n📦 Grup: {group_name}"]
+
+        # Sadece ilk 10 metraj
+        for t in self.selected_group_details[:10]:
+            line = f"• {t['description'][:40]}: {t['quantity']:.2f} {t['unit']}"
+            context_lines.append(line)
+
+        result = "\n".join(context_lines)
+        
+        # Max 2000 karakter
+        if len(result) > 2000:
+            result = result[:2000]
+        
+        return result
 
 class AIAnalysisThread(QThread):
     finished = pyqtSignal(list, str, str) # components, explanation, error
     status_update = pyqtSignal(str)
 
-    def __init__(self, description, unit, api_key, model, base_url, context_data="", gemini_key=None, gemini_model=None, provider="OpenRouter", nakliye_params=None):
+    def __init__(self, description, unit, api_key, model, base_url, context_data="", gemini_key=None, gemini_model=None, provider="OpenRouter", nakliye_params=None, custom_prompt=None):
         super().__init__()
         self.description = description
         self.unit = unit
@@ -112,9 +212,21 @@ class AIAnalysisThread(QThread):
         self.gemini_key = gemini_key
         self.gemini_model = gemini_model
         self.provider = provider
+        self.custom_prompt = custom_prompt  # Özel prompt
         self.nakliye_params = nakliye_params or {}
         
     def run(self):
+        # Context'i tamamen devre dışı bırak - token limit aşımını önlemek için
+        # Çok büyük veriler API'yi patlatıyor
+        self.context_data = ""  # Context tamamen kapatıldı
+        
+        print(f"[DEBUG] Context devre dışı bırakıldı (token tasarrufu)")
+        
+        # Custom prompt çok büyükse kullanma
+        if self.custom_prompt and len(self.custom_prompt) > 10000:
+            print(f"[DEBUG] Custom prompt çok büyük ({len(self.custom_prompt)} karakter), varsayılan kullanılacak")
+            self.custom_prompt = None
+        
         # Nakliye parametrelerini al
         nakliye_mesafe = self.nakliye_params.get('mesafe', 20000)  # metre
         nakliye_k = self.nakliye_params.get('k', 1.0)
@@ -129,8 +241,97 @@ class AIAnalysisThread(QThread):
         # KGM Formül bilgisi
         nakliye_km = nakliye_mesafe / 1000  # km'ye çevir
 
-        # PROMPT ENGINEERING FOR TURKISH COMPLIANCE
-        prompt = f"""
+        # Özel prompt varsa kullan, yoksa varsayılanı kullan
+        if self.custom_prompt:
+            try:
+                prompt = self.custom_prompt.format(
+                    description=self.description,
+                    unit=self.unit,
+                    context_data=self.context_data,
+                    nakliye_mesafe=nakliye_mesafe,
+                    nakliye_km=nakliye_km,
+                    nakliye_k=nakliye_k,
+                    nakliye_a=nakliye_a,
+                    yogunluk_kum=yogunluk_kum,
+                    yogunluk_moloz=yogunluk_moloz,
+                    yogunluk_beton=yogunluk_beton,
+                    yogunluk_cimento=yogunluk_cimento,
+                    yogunluk_demir=yogunluk_demir
+                )
+            except KeyError as e:
+                print(f"Prompt format hatası: {e}, varsayılan kullanılıyor")
+                prompt = self._get_default_prompt(nakliye_mesafe, nakliye_km, nakliye_k, nakliye_a,
+                                                   yogunluk_kum, yogunluk_moloz, yogunluk_beton,
+                                                   yogunluk_cimento, yogunluk_demir)
+        else:
+            prompt = self._get_default_prompt(nakliye_mesafe, nakliye_km, nakliye_k, nakliye_a,
+                                               yogunluk_kum, yogunluk_moloz, yogunluk_beton,
+                                               yogunluk_cimento, yogunluk_demir)
+
+        gemini_error = None
+        openrouter_error = None
+
+        if self.provider == "Google Gemini":
+            # Birincil: Gemini
+            if self.gemini_key:
+                try:
+                    self.status_update.emit("🤖 Gemini ile hesaplanıyor...")
+                    self.call_gemini(prompt)
+                    return  # Başarılı, çık
+                except Exception as e:
+                    gemini_error = str(e)
+                    self.status_update.emit("⚠️ Gemini hatası, OpenRouter deneniyor...")
+            else:
+                gemini_error = "Gemini API anahtarı tanımlı değil"
+                self.status_update.emit("⚠️ Gemini anahtarı yok, OpenRouter kullanılıyor...")
+
+            # Yedek: OpenRouter
+            if self.api_key:
+                try:
+                    self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
+                    self.call_openrouter(prompt)
+                    return  # Başarılı, çık
+                except Exception as e:
+                    openrouter_error = str(e)
+            else:
+                openrouter_error = "OpenRouter API anahtarı tanımlı değil"
+
+            # Her ikisi de başarısız
+            self.finished.emit([], "", f"Tüm kaynaklar başarısız.\nGemini: {gemini_error}\nOpenRouter: {openrouter_error}")
+
+        else:
+            # Birincil: OpenRouter
+            if self.api_key:
+                try:
+                    self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
+                    self.call_openrouter(prompt)
+                    return  # Başarılı, çık
+                except Exception as e:
+                    openrouter_error = str(e)
+                    self.status_update.emit("⚠️ OpenRouter hatası, Gemini deneniyor...")
+            else:
+                openrouter_error = "OpenRouter API anahtarı tanımlı değil"
+                self.status_update.emit("⚠️ OpenRouter anahtarı yok, Gemini kullanılıyor...")
+
+            # Yedek: Gemini
+            if self.gemini_key:
+                try:
+                    self.status_update.emit("🤖 Gemini ile hesaplanıyor...")
+                    self.call_gemini(prompt)
+                    return  # Başarılı, çık
+                except Exception as e:
+                    gemini_error = str(e)
+            else:
+                gemini_error = "Gemini API anahtarı tanımlı değil"
+
+            # Her ikisi de başarısız
+            self.finished.emit([], "", f"Tüm kaynaklar başarısız.\nOpenRouter: {openrouter_error}\nGemini: {gemini_error}")
+
+    def _get_default_prompt(self, nakliye_mesafe, nakliye_km, nakliye_k, nakliye_a,
+                            yogunluk_kum, yogunluk_moloz, yogunluk_beton,
+                            yogunluk_cimento, yogunluk_demir):
+        """Varsayılan analiz promptunu döndür"""
+        return f"""
         Sen uzman bir Türk İnşaat Metraj ve Hakediş Mühendisisin.
 
         Görev: Aşağıdaki poz tanımı için "Çevre ve Şehircilik Bakanlığı" birim fiyat analiz formatına uygun detaylı bir analiz oluştur.
@@ -196,66 +397,15 @@ class AIAnalysisThread(QThread):
         Lütfen "explanation" kısmında neden bu malzemeleri ve miktarları seçtiğini, nakliye hesabını hangi formülle yaptığını detaylıca anlat.
         """
 
-        gemini_error = None
-        openrouter_error = None
-
-        if self.provider == "Google Gemini":
-            # Birincil: Gemini
-            if self.gemini_key:
-                try:
-                    self.status_update.emit("🤖 Gemini ile hesaplanıyor...")
-                    self.call_gemini(prompt)
-                    return  # Başarılı, çık
-                except Exception as e:
-                    gemini_error = str(e)
-                    self.status_update.emit("⚠️ Gemini hatası, OpenRouter deneniyor...")
-            else:
-                gemini_error = "Gemini API anahtarı tanımlı değil"
-                self.status_update.emit("⚠️ Gemini anahtarı yok, OpenRouter kullanılıyor...")
-
-            # Yedek: OpenRouter
-            if self.api_key:
-                try:
-                    self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
-                    self.call_openrouter(prompt)
-                    return  # Başarılı, çık
-                except Exception as e:
-                    openrouter_error = str(e)
-            else:
-                openrouter_error = "OpenRouter API anahtarı tanımlı değil"
-
-            # Her ikisi de başarısız
-            self.finished.emit([], "", f"Tüm kaynaklar başarısız.\nGemini: {gemini_error}\nOpenRouter: {openrouter_error}")
-
-        else:
-            # Birincil: OpenRouter
-            if self.api_key:
-                try:
-                    self.status_update.emit("🤖 OpenRouter ile hesaplanıyor...")
-                    self.call_openrouter(prompt)
-                    return  # Başarılı, çık
-                except Exception as e:
-                    openrouter_error = str(e)
-                    self.status_update.emit("⚠️ OpenRouter hatası, Gemini deneniyor...")
-            else:
-                openrouter_error = "OpenRouter API anahtarı tanımlı değil"
-                self.status_update.emit("⚠️ OpenRouter anahtarı yok, Gemini kullanılıyor...")
-
-            # Yedek: Gemini
-            if self.gemini_key:
-                try:
-                    self.status_update.emit("🤖 Gemini ile hesaplanıyor...")
-                    self.call_gemini(prompt)
-                    return  # Başarılı, çık
-                except Exception as e:
-                    gemini_error = str(e)
-            else:
-                gemini_error = "Gemini API anahtarı tanımlı değil"
-
-            # Her ikisi de başarısız
-            self.finished.emit([], "", f"Tüm kaynaklar başarısız.\nOpenRouter: {openrouter_error}\nGemini: {gemini_error}")
-
     def call_openrouter(self, prompt):
+        # Prompt boyutunu kontrol et ve sınırla
+        MAX_PROMPT_CHARS = 50000  # ~12500 token
+        print(f"[DEBUG] Prompt boyutu: {len(prompt)} karakter")
+        
+        if len(prompt) > MAX_PROMPT_CHARS:
+            print(f"[DEBUG] Prompt çok büyük, {MAX_PROMPT_CHARS} karaktere kısaltılıyor...")
+            prompt = prompt[:MAX_PROMPT_CHARS] + "\n\n[PROMPT KISILDI - SADECE JSON CEVAP VER]"
+        
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -502,16 +652,24 @@ class AnalysisBuilder(QWidget):
         layout.addWidget(res_group)
         
         # --- Save ---
+        save_btns_layout = QHBoxLayout()
+
         save_btn = QPushButton("💾 Analizi Veritabanına Kaydet")
         save_btn.setStyleSheet("background-color: #4CAF50; color: white; padding: 12px; font-weight: bold;")
         save_btn.clicked.connect(self.save_analysis)
-        save_btn.clicked.connect(self.save_analysis)
-        layout.addWidget(save_btn)
-        
+        save_btns_layout.addWidget(save_btn)
+
         save_add_btn = QPushButton("💾 + 💰 Kaydet ve Projeye Ekle")
         save_add_btn.setStyleSheet("background-color: #f57f17; color: white; padding: 12px; font-weight: bold;")
         save_add_btn.clicked.connect(self.save_and_add_to_project)
-        layout.addWidget(save_add_btn)
+        save_btns_layout.addWidget(save_add_btn)
+
+        export_pdf_btn = QPushButton("📄 PDF Olarak Kaydet")
+        export_pdf_btn.setStyleSheet("background-color: #1976D2; color: white; padding: 12px; font-weight: bold;")
+        export_pdf_btn.clicked.connect(self.export_analysis_to_pdf)
+        save_btns_layout.addWidget(export_pdf_btn)
+
+        layout.addLayout(save_btns_layout)
         
         self.setLayout(layout)
         
@@ -520,21 +678,27 @@ class AnalysisBuilder(QWidget):
 
     def start_ai_generation(self):
         dialog = AIPromptDialog(
-            self, 
-            "Yapay Zeka Analiz Asistanı", 
-            "Analiz talebinizi detaylıca yazın (Örn: 'C25 beton dökülmesi, nakliye ve kalıp dahil'):"
+            self,
+            "Yapay Zeka Analiz Asistanı",
+            "Analiz talebinizi detaylıca yazın (Örn: 'C25 beton dökülmesi, nakliye ve kalıp dahil'):",
+            show_group_selector=True,
+            db=self.db
         )
-        
+
         if dialog.exec_() != QDialog.Accepted:
              return
-             
+
         text = dialog.get_text()
-        
+
         if not text.strip():
             return
-            
+
         desc = text.strip()
         self.desc_input.setText(desc) # Update UI
+
+        # İmalat grubu metraj context'ini al
+        group_metraj_context = dialog.get_group_metraj_context()
+        self._selected_group_id = dialog.get_selected_group_id()
         
         unit = self.unit_input.text()
             
@@ -555,10 +719,23 @@ class AnalysisBuilder(QWidget):
 
         # KGM 2025 Nakliye Parametrelerini Al
         nakliye_mode = self.db.get_setting("nakliye_mode") or "AI'ya Bırak (Varsayılan değerler kullanılır)"
+        is_ai_mode = 'Manuel' not in nakliye_mode
+
+        # K katsayısını belirle (Türkçe formattan parse et)
+        saved_k = self.db.get_setting("nakliye_k") or "1,00"
+        k_value = self.parse_turkish_number(saved_k) or 1.0
+
+        # AI modunda K katsayısını CSV'den otomatik çek
+        if is_ai_mode and self.parent_app and hasattr(self.parent_app, 'csv_manager'):
+            auto_k = self.get_k_coefficient_from_csv()
+            if auto_k:
+                k_value = auto_k
+                print(f"K katsayısı CSV'den otomatik çekildi: {k_value}")
+
         nakliye_params = {
-            'mode': 'manual' if 'Manuel' in nakliye_mode else 'ai',
+            'mode': 'manual' if not is_ai_mode else 'ai',
             'mesafe': int(self.db.get_setting("nakliye_mesafe") or 20000),
-            'k': float(self.db.get_setting("nakliye_k") or 1.0),
+            'k': k_value,
             'a': float(self.db.get_setting("nakliye_a") or 1.0),
             'yogunluk_kum': float(self.db.get_setting("yogunluk_kum") or 1.60),
             'yogunluk_moloz': float(self.db.get_setting("yogunluk_moloz") or 1.80),
@@ -572,61 +749,135 @@ class AnalysisBuilder(QWidget):
         # RAG Implementation: Extract keywords and search context
         context_text = self.extract_and_format_context(desc)
 
+        # İmalat grubu metraj context'ini ekle (seçildiyse)
+        if group_metraj_context:
+            context_text += "\n" + group_metraj_context
+
         # Kullanıcı promptunu sakla (kayıt için)
         self._last_ai_prompt = desc
 
-        self.thread = AIAnalysisThread(desc, unit, api_key, model, base_url, context_text, gemini_key, gemini_model, provider, nakliye_params)
+        # Özel prompt varsa al
+        custom_prompt = self.db.get_setting("custom_analysis_prompt") or None
+
+        self.thread = AIAnalysisThread(desc, unit, api_key, model, base_url, context_text, gemini_key, gemini_model, provider, nakliye_params, custom_prompt)
         self.thread.finished.connect(self.on_ai_finished)
         self.thread.status_update.connect(lambda s: self.generate_btn.setText(s))
         self.thread.start()
 
     def extract_and_format_context(self, description):
-        """Extract keywords from description and search in loaded PDFs"""
+        """Extract keywords from description and search in loaded PDFs - SINIRLI"""
         if not self.parent_app or not hasattr(self.parent_app, 'search_engine'):
             return ""
 
-        # Simple keyword extraction (remove stop words if needed, but here we just take words > 3 chars)
+        # Simple keyword extraction
         keywords = [w.strip() for w in description.split() if len(w.strip()) > 3]
         
         found_items = []
         search_engine = self.parent_app.search_engine
         
-        # Limit total context to avoid token issues
-        max_items = 20
+        # Limit total context - DAHA DA AZALTILDI
+        max_items = 5  # 10'dan 5'e
         
-        for keyword in keywords:
+        for keyword in keywords[:3]:  # Sadece ilk 3 anahtar kelime
             if len(found_items) >= max_items:
                 break
                 
-            # Use existing simple search logic from search engine manually or implement custom loop
-            # Here we iterate loaded PDFs
             for file_name, lines in search_engine.pdf_data.items():
                 for line_data in lines:
                     text = line_data['text']
                     if keyword.lower() in text.lower():
-                        # Try to parse if it looks like a poz line
-                        # Format: Code | Desc | Unit | Price (Approx)
-                        if '|' in text:
-                            found_items.append(text.strip())
+                        if '|' in text and len(text) < 200:
+                            found_items.append(text.strip()[:150])
                             if len(found_items) >= max_items:
                                 break
                 if len(found_items) >= max_items:
                     break
         
         if not found_items:
-            # return "İlgili poz bulunamadı."
-            context_str = "PDF Araması: İlgili poz bulunamadı.\n"
+            context_str = ""
         else:
-            context_str = "PDF Kaynaklı Bilgiler:\n" + "\n".join(found_items) + "\n"
-            
-        # Add Quantity Takeoff Context
+            context_str = "PDF Bilgileri:\n" + "\n".join(found_items) + "\n"
+
+        # Quantity Takeoff - ÇOK SINIRLI
         takeoffs = self.db.get_quantity_takeoffs()
         if takeoffs:
-            context_str += "\nPROJE İMALAT METRAJLARI (Bu projedeki gerçek ölçümler):\n"
-            for t in takeoffs:
-                context_str += f"- {t['description']}: {t['quantity']} {t['unit']} (Benzer:{t['similar_count']}, Boy:{t['length']}, En:{t['width']}, Yük:{t['height']}) - Not: {t['notes']}\n"
-                
+            context_str += "\nMetrajlar:\n"
+            for t in takeoffs[:10]:  # Sadece ilk 10
+                line = f"- {t['description'][:30]}: {t['quantity']} {t['unit']}\n"
+                context_str += line
+
+        # Toplam context - DAHA DA SINIRLI
+        max_chars = 4000  # 8000'den 4000'e
+        if len(context_str) > max_chars:
+            context_str = context_str[:max_chars]
+
         return context_str
+
+    def get_k_coefficient_from_csv(self):
+        """CSV verilerinden K katsayısını otomatik çek"""
+        try:
+            if not self.parent_app or not hasattr(self.parent_app, 'csv_manager'):
+                return None
+
+            poz_data = self.parent_app.csv_manager.poz_data
+            if not poz_data:
+                return None
+
+            # Öncelikli arama: Tam poz numarası eşleşmesi
+            priority_pozlar = ['10.110.1003', '02.017']
+
+            for target_poz in priority_pozlar:
+                if target_poz in poz_data:
+                    poz_info = poz_data[target_poz]
+                    unit_price = poz_info.get('unit_price', '')
+                    if unit_price:
+                        value = self.parse_turkish_number(unit_price)
+                        if value and value > 0:
+                            return value
+
+            # İkincil arama: Poz numarasında içeren
+            for poz_no, poz_info in poz_data.items():
+                if any(term in poz_no for term in priority_pozlar):
+                    unit_price = poz_info.get('unit_price', '')
+                    if unit_price:
+                        value = self.parse_turkish_number(unit_price)
+                        if value and value > 0:
+                            return value
+
+            # Üçüncül arama: Açıklamada "motorlu araç taşıma katsayısı" geçen
+            for poz_no, poz_info in poz_data.items():
+                desc = poz_info.get('description', '').lower()
+                if 'motorlu araç' in desc and 'taşıma katsayısı' in desc:
+                    unit_price = poz_info.get('unit_price', '')
+                    if unit_price:
+                        value = self.parse_turkish_number(unit_price)
+                        if value and value > 0:
+                            return value
+
+            return None
+
+        except Exception as e:
+            print(f"K katsayısı çekme hatası: {e}")
+            return None
+
+    def parse_turkish_number(self, value_str):
+        """Türkçe sayı formatını parse et (1.750,00 -> 1750.00)"""
+        try:
+            if not value_str or str(value_str).lower() == 'nan':
+                return None
+
+            # String'e çevir ve temizle
+            clean = str(value_str).strip().replace(' ', '').replace('TL', '')
+
+            # Türkçe format: binlik ayraç nokta, ondalık virgül
+            # Örnek: 1.750,00 -> 1750.00
+            if ',' in clean:
+                # Noktaları kaldır (binlik ayraç), virgülü noktaya çevir
+                clean = clean.replace('.', '').replace(',', '.')
+
+            return float(clean)
+        except (ValueError, TypeError):
+            return None
         
     def set_loading(self, loading):
         self.generate_btn.setEnabled(not loading)
@@ -987,3 +1238,79 @@ class AnalysisBuilder(QWidget):
                 )
                 if success:
                     QMessageBox.information(self, "Başarılı", "Poz projeye eklendi!")
+
+    def export_analysis_to_pdf(self):
+        """Birim fiyat analizini PDF olarak kaydet"""
+        from PyQt5.QtWidgets import QFileDialog
+        from datetime import datetime
+
+        poz_no = self.poz_no_input.text().strip()
+        description = self.desc_input.text().strip()
+
+        if not poz_no or not description:
+            QMessageBox.warning(self, "Uyarı", "Lütfen önce Poz No ve Tanım alanlarını doldurun!")
+            return
+
+        if self.comp_table.rowCount() == 0:
+            QMessageBox.warning(self, "Uyarı", "Analiz tablosunda bileşen bulunmuyor!")
+            return
+
+        # Dosya kaydetme dialogu
+        default_name = f"Analiz_{poz_no.replace('.', '_').replace('/', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "PDF Olarak Kaydet",
+            default_name,
+            "PDF Dosyası (*.pdf)"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            from pdf_exporter import PDFExporter
+
+            exporter = PDFExporter()
+
+            # Analiz bilgilerini hazırla
+            work_name = self.db.get_setting("work_name")
+            
+            analysis_info = {
+                'poz_no': poz_no,
+                'description': description,
+                'unit': self.unit_input.text(),
+                'ai_explanation': getattr(self, 'last_ai_explanation', ''),
+                'work_name': work_name if work_name else ""
+            }
+
+            # Bileşenleri topla
+            components = []
+            for i in range(self.comp_table.rowCount()):
+                try:
+                    comp = {
+                        'type': self.comp_table.item(i, 0).text() if self.comp_table.item(i, 0) else 'Malzeme',
+                        'code': self.comp_table.item(i, 1).text() if self.comp_table.item(i, 1) else '',
+                        'name': self.comp_table.item(i, 2).text() if self.comp_table.item(i, 2) else '',
+                        'unit': self.comp_table.item(i, 3).text() if self.comp_table.item(i, 3) else '',
+                        'quantity': float(self.comp_table.item(i, 4).text() or 0) if self.comp_table.item(i, 4) else 0,
+                        'unit_price': float(self.comp_table.item(i, 5).text() or 0) if self.comp_table.item(i, 5) else 0
+                    }
+                    components.append(comp)
+                except:
+                    continue
+
+            # PDF oluştur
+            success = exporter.export_birim_fiyat_analizi(filepath, analysis_info, components)
+
+            if success:
+                QMessageBox.information(self, "Başarılı", f"PDF başarıyla kaydedildi:\n{filepath}")
+
+                # PDF'i aç
+                import os
+                os.startfile(filepath)
+            else:
+                QMessageBox.critical(self, "Hata", "PDF oluşturulurken bir hata oluştu!")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"PDF oluşturma hatası:\n{str(e)}")

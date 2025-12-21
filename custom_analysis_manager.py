@@ -600,6 +600,8 @@ class CustomAnalysisManager(QWidget):
         menu = QMenu()
         add_to_project_action = menu.addAction("💰 Projeye Ekle")
         menu.addSeparator()
+        export_pdf_action = menu.addAction("📄 PDF Olarak Çıktı Al")
+        menu.addSeparator()
         show_details_action = menu.addAction("🤖 AI İsteği ve Puanı Göster")
         menu.addSeparator()
         delete_action = menu.addAction("🗑️ Pozu Sil")
@@ -608,6 +610,8 @@ class CustomAnalysisManager(QWidget):
 
         if action == add_to_project_action:
             self.add_to_project()
+        elif action == export_pdf_action:
+            self.export_analysis_to_pdf()
         elif action == show_details_action:
             self.show_ai_details()
         elif action == delete_action:
@@ -889,3 +893,59 @@ class CustomAnalysisManager(QWidget):
         layout.addWidget(btn_box)
 
         dialog.exec_()
+
+    def export_analysis_to_pdf(self):
+        """Seçili analizi PDF olarak dışa aktar - Resmi Kurum Formatı"""
+        if not self.current_analysis_id:
+            QMessageBox.warning(self, "Uyarı", "Lütfen önce bir analiz seçin.")
+            return
+
+        current_row = self.list_widget.currentRow()
+        if current_row < 0:
+            return
+
+        item = self.list_widget.item(current_row)
+        analysis = item.data(Qt.UserRole)
+
+        # Bileşenleri al
+        components = self.db.get_analysis_components(self.current_analysis_id)
+
+        # İşin adını ayarlardan al
+        work_name = self.db.get_setting("work_name") or ""
+
+        # Analiz bilgilerini hazırla
+        analysis_info = {
+            'poz_no': analysis.get('poz_no', ''),
+            'description': analysis.get('name', ''),
+            'unit': analysis.get('unit', 'Adet'),
+            'work_name': work_name
+        }
+
+        # Dosya kaydetme dialogu
+        from PyQt5.QtWidgets import QFileDialog
+        default_filename = f"Analiz_{analysis.get('poz_no', 'OZEL').replace('/', '_').replace('.', '_')}.pdf"
+        
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "PDF Olarak Kaydet",
+            default_filename,
+            "PDF Dosyaları (*.pdf)"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            from pdf_exporter import PDFExporter
+            exporter = PDFExporter()
+
+            success = exporter.export_birim_fiyat_analizi(filepath, analysis_info, components)
+
+            if success:
+                QMessageBox.information(self, "Başarılı", f"PDF başarıyla kaydedildi:\n{filepath}")
+
+                # PDF'i aç
+                import os
+                os.startfile(filepath)
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"PDF oluşturma hatası: {str(e)}")

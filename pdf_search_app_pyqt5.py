@@ -1446,36 +1446,135 @@ class PozAnalyzer(QThread):
 
 
 class CSVLoaderThread(QThread):
-    """CSV dosyalarını arka planda yükleyen thread"""
-    finished = pyqtSignal(dict, int) # data, count
+    """CSV ve PDF dosyalarını arka planda yükleyen thread (Cache destekli)"""
+    finished = pyqtSignal(dict, int, list) # data, count, loaded_files
     error = pyqtSignal(str)
+    progress = pyqtSignal(str) # Progress mesajı
 
     def __init__(self, csv_folder):
         super().__init__()
         self.csv_folder = csv_folder
         self._stop_requested = False
+        self.cache_dir = Path(__file__).parent / "cache"
+        self.cache_file = self.cache_dir / "poz_data_cache.json"
 
     def stop(self):
         self._stop_requested = True
 
+    def get_file_hash(self, file_path):
+        """Dosya hash'i hesapla"""
+        try:
+            stat = file_path.stat()
+            hash_string = f"{file_path.name}_{stat.st_size}_{stat.st_mtime}"
+            return hashlib.md5(hash_string.encode()).hexdigest()
+        except Exception:
+            return None
+
+    def load_cache(self):
+        """Cache'den poz verilerini yükle"""
+        try:
+            if not self.cache_file.exists():
+                return None, None, None
+
+            with open(self.cache_file, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+
+            # Dosya hash'lerini kontrol et
+            file_hashes = cache_data.get('file_hashes', {})
+
+            # Mevcut dosyaları al
+            current_files = {}
+            if self.csv_folder.exists():
+                for f in self.csv_folder.glob("*.csv"):
+                    current_files[f.name] = self.get_file_hash(f)
+                for f in self.csv_folder.glob("*.pdf"):
+                    current_files[f.name] = self.get_file_hash(f)
+
+            # Dosya değişikliği kontrolü
+            cached_files = set(file_hashes.keys())
+            current_file_names = set(current_files.keys())
+
+            # Yeni dosya var mı?
+            if current_file_names - cached_files:
+                return None, None, None
+
+            # Silinen dosya var mı?
+            if cached_files - current_file_names:
+                return None, None, None
+
+            # Hash değişmiş mi?
+            for fname, fhash in current_files.items():
+                if file_hashes.get(fname) != fhash:
+                    return None, None, None
+
+            # Cache geçerli
+            return (
+                cache_data.get('poz_data', {}),
+                cache_data.get('loaded_files', []),
+                cache_data.get('timestamp', '')
+            )
+
+        except Exception as e:
+            print(f"Cache yükleme hatası: {e}")
+            return None, None, None
+
+    def save_cache(self, poz_data, loaded_files):
+        """Poz verilerini cache'e kaydet"""
+        try:
+            self.cache_dir.mkdir(exist_ok=True)
+
+            # Dosya hash'lerini hesapla
+            file_hashes = {}
+            if self.csv_folder.exists():
+                for f in self.csv_folder.glob("*.csv"):
+                    file_hashes[f.name] = self.get_file_hash(f)
+                for f in self.csv_folder.glob("*.pdf"):
+                    file_hashes[f.name] = self.get_file_hash(f)
+
+            cache_data = {
+                'timestamp': datetime.now().isoformat(),
+                'poz_data': poz_data,
+                'loaded_files': loaded_files,
+                'file_hashes': file_hashes
+            }
+
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+
+            print(f"Poz cache kaydedildi: {len(poz_data)} poz, {len(loaded_files)} dosya")
+            return True
+        except Exception as e:
+            print(f"Cache kaydetme hatası: {e}")
+            return False
+
     def run(self):
         try:
-            poz_data = {}
-            if not self.csv_folder.exists():
-                self.error.emit(f"CSV klasörü bulunamadı: {self.csv_folder}")
+            # Önce cache'i kontrol et
+            self.progress.emit("Cache kontrol ediliyor...")
+            cached_data, cached_files, cache_time = self.load_cache()
+
+            if cached_data is not None:
+                self.progress.emit(f"Cache'den yüklendi ({len(cached_data)} poz)")
+                self.finished.emit(cached_data, len(cached_data), cached_files)
                 return
 
-            csv_files = list(self.csv_folder.glob("*.csv"))
-            if not csv_files:
-                self.finished.emit({}, 0)
+            poz_data = {}
+            loaded_files = []
+
+            if not self.csv_folder.exists():
+                self.error.emit(f"PDF klasörü bulunamadı: {self.csv_folder}")
                 return
+
+            # CSV dosyalarını yükle
+            csv_files = list(self.csv_folder.glob("*.csv"))
+            self.progress.emit(f"CSV dosyaları taranıyor... ({len(csv_files)} dosya)")
 
             for csv_path in csv_files:
                 if self._stop_requested:
                     break
                 try:
                     df = pd.read_csv(csv_path, encoding='utf-8-sig')
-                    
+
                     # Sütun kontrolü
                     required_columns = ['Poz No', 'Açıklama', 'Kurum']
                     missing_columns = [col for col in required_columns if col not in df.columns]
@@ -1483,9 +1582,10 @@ class CSVLoaderThread(QThread):
                     if missing_columns:
                         continue
 
+                    csv_poz_count = 0
                     for idx, row in df.iterrows():
                         poz_no = str(row['Poz No']).strip()
-                        
+
                         poz_info = {
                             'poz_no': poz_no,
                             'description': str(row.get('Açıklama', '')).strip(),
@@ -1503,19 +1603,130 @@ class CSVLoaderThread(QThread):
                                 if val and val.lower() != 'nan':
                                     poz_info['unit_price'] = val
                                     break
-                                    
+
                         if 'unit_price' not in poz_info:
                              poz_info['unit_price'] = '0,00'
-                             
+
                         poz_data[poz_no] = poz_info
+                        csv_poz_count += 1
+
+                    loaded_files.append({
+                        'name': csv_path.name,
+                        'type': 'CSV',
+                        'poz_count': csv_poz_count
+                    })
 
                 except Exception as e:
                     print(f"CSV Okuma hatası {csv_path}: {e}")
-                    
-            self.finished.emit(poz_data, len(poz_data))
-            
+
+            # PDF dosyalarını yükle
+            pdf_files = list(self.csv_folder.glob("*.pdf"))
+            self.progress.emit(f"PDF dosyaları taranıyor... ({len(pdf_files)} dosya)")
+
+            for pdf_path in pdf_files:
+                if self._stop_requested:
+                    break
+                try:
+                    self.progress.emit(f"PDF yükleniyor: {pdf_path.name}")
+                    pdf_poz_count = self.extract_pozlar_from_pdf(pdf_path, poz_data)
+
+                    if pdf_poz_count > 0:
+                        loaded_files.append({
+                            'name': pdf_path.name,
+                            'type': 'PDF',
+                            'poz_count': pdf_poz_count
+                        })
+
+                except Exception as e:
+                    print(f"PDF Okuma hatası {pdf_path}: {e}")
+
+            # Cache'e kaydet
+            self.save_cache(poz_data, loaded_files)
+
+            self.finished.emit(poz_data, len(poz_data), loaded_files)
+
         except Exception as e:
             self.error.emit(str(e))
+
+    def extract_pozlar_from_pdf(self, pdf_path, poz_data):
+        """PDF dosyasından pozları çıkar"""
+        try:
+            doc = fitz.open(pdf_path)
+            poz_count = 0
+
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text()
+
+                # Satır satır işle
+                lines = text.split('\n')
+
+                for i, line in enumerate(lines):
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    # Poz numarası pattern'leri
+                    # Örnek: 10.110.1003, 02.017, Y.15.140/01, MSB.700
+                    poz_patterns = [
+                        r'^(\d{2}\.\d{3}\.\d{4})',  # 10.110.1003
+                        r'^(\d{2}\.\d{3})',  # 02.017
+                        r'^([A-Z]{1,3}\.\d{2,3}\.\d{3})',  # Y.15.140
+                        r'^([A-Z]{2,3}\.\d{3})',  # MSB.700
+                    ]
+
+                    poz_no = None
+                    for pattern in poz_patterns:
+                        match = re.match(pattern, line)
+                        if match:
+                            poz_no = match.group(1)
+                            break
+
+                    if poz_no and poz_no not in poz_data:
+                        # Açıklama ve fiyat çıkar
+                        remaining = line[len(poz_no):].strip()
+
+                        # Fiyat bulmaya çalış (sayısal değer)
+                        price_match = re.search(r'([\d.,]+)\s*(?:TL)?$', remaining)
+                        unit_price = '0,00'
+                        description = remaining
+
+                        if price_match:
+                            try:
+                                price_str = price_match.group(1).replace('.', '').replace(',', '.')
+                                float(price_str)  # Geçerli sayı mı?
+                                unit_price = price_match.group(1)
+                                description = remaining[:price_match.start()].strip()
+                            except ValueError:
+                                pass
+
+                        # Birim bulmaya çalış
+                        unit = ''
+                        unit_patterns = ['m³', 'm²', 'm2', 'm3', 'ton', 'kg', 'adet', 'lt', 'sa', 'gün', 'ay']
+                        for u in unit_patterns:
+                            if u in description.lower():
+                                unit = u
+                                break
+
+                        poz_info = {
+                            'poz_no': poz_no,
+                            'description': description[:200] if description else f"PDF Poz: {poz_no}",
+                            'unit': unit,
+                            'quantity': '',
+                            'institution': 'PDF',
+                            'unit_price': unit_price,
+                            'source_file': pdf_path.name
+                        }
+
+                        poz_data[poz_no] = poz_info
+                        poz_count += 1
+
+            doc.close()
+            return poz_count
+
+        except Exception as e:
+            print(f"PDF poz çıkarma hatası {pdf_path}: {e}")
+            return 0
 
 class ExtractorWorkerThread(QThread):
     """PDF → CSV çıkartma işlemini thread'de çalıştır"""
@@ -2700,23 +2911,38 @@ class SettingsDialog(QDialog):
         self.api_key_input.setPlaceholderText("sk-or-...")
         form.addRow("OpenRouter API Key:", self.api_key_input)
 
-        # Model Selector
+        # Model Selector with Refresh Button
+        model_layout = QHBoxLayout()
         self.model_input = QComboBox()
         self.model_input.setEditable(True)
-        models = [
-            "mistralai/devstral-2512:free",
-            "amazon/nova-2-lite-v1:free",
-            "arcee-ai/trinity-mini:free",
-            "tngtech/tng-r1t-chimera:free",
-            "google/gemini-2.0-flash-exp:free"
-        ]
+        self.model_input.setMinimumWidth(350)
+
+        # Önbellekten modelleri yükle veya varsayılanları kullan
+        cached_models = self.db.get_setting("openrouter_models_cache")
+        if cached_models:
+            try:
+                models = json.loads(cached_models)
+            except:
+                models = self._get_default_openrouter_models()
+        else:
+            models = self._get_default_openrouter_models()
+
         self.model_input.addItems(models)
         current_model = self.db.get_setting("openrouter_model")
         if current_model:
             self.model_input.setCurrentText(current_model)
         else:
-            self.model_input.setCurrentText(models[0])
-        form.addRow("OpenRouter Model:", self.model_input)
+            self.model_input.setCurrentText(models[0] if models else "")
+        model_layout.addWidget(self.model_input)
+
+        # Model güncelleme butonu
+        self.refresh_or_models_btn = QPushButton("🔄")
+        self.refresh_or_models_btn.setToolTip("OpenRouter'dan model listesini güncelle")
+        self.refresh_or_models_btn.setFixedWidth(35)
+        self.refresh_or_models_btn.clicked.connect(self.fetch_openrouter_models)
+        model_layout.addWidget(self.refresh_or_models_btn)
+
+        form.addRow("OpenRouter Model:", model_layout)
 
         # Base URL (Advanced)
         self.base_url_input = QLineEdit()
@@ -2734,20 +2960,38 @@ class SettingsDialog(QDialog):
         self.gemini_key_input.setPlaceholderText("AIzaSy...")
         form.addRow("Google API Key:", self.gemini_key_input)
         
+        # Gemini Model Selector with Refresh Button
+        gemini_model_layout = QHBoxLayout()
         self.gemini_model_input = QComboBox()
         self.gemini_model_input.setEditable(True)
-        gemini_models = [
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
-            "gemini-pro"
-        ]
+        self.gemini_model_input.setMinimumWidth(350)
+
+        # Önbellekten modelleri yükle veya varsayılanları kullan
+        cached_gemini_models = self.db.get_setting("gemini_models_cache")
+        if cached_gemini_models:
+            try:
+                gemini_models = json.loads(cached_gemini_models)
+            except:
+                gemini_models = self._get_default_gemini_models()
+        else:
+            gemini_models = self._get_default_gemini_models()
+
         self.gemini_model_input.addItems(gemini_models)
         current_gemini_model = self.db.get_setting("gemini_model")
         if current_gemini_model:
             self.gemini_model_input.setCurrentText(current_gemini_model)
         else:
-            self.gemini_model_input.setCurrentText(gemini_models[0])
-        form.addRow("Google Model:", self.gemini_model_input)
+            self.gemini_model_input.setCurrentText(gemini_models[0] if gemini_models else "")
+        gemini_model_layout.addWidget(self.gemini_model_input)
+
+        # Gemini model güncelleme butonu
+        self.refresh_gemini_models_btn = QPushButton("🔄")
+        self.refresh_gemini_models_btn.setToolTip("Google'dan model listesini güncelle")
+        self.refresh_gemini_models_btn.setFixedWidth(35)
+        self.refresh_gemini_models_btn.clicked.connect(self.fetch_gemini_models)
+        gemini_model_layout.addWidget(self.refresh_gemini_models_btn)
+
+        form.addRow("Google Model:", gemini_model_layout)
 
         api_layout.addLayout(form)
 
@@ -2976,12 +3220,25 @@ class SettingsDialog(QDialog):
         self.nakliye_mesafe_input.setValue(int(self.db.get_setting("nakliye_mesafe") or 20000))
         params_form.addRow("Ortalama Taşıma Mesafesi (M):", self.nakliye_mesafe_input)
 
-        # Taşıma Katsayısı (K) - Motorlu araç poz 02.017
-        self.nakliye_k_input = QDoubleSpinBox()
-        self.nakliye_k_input.setRange(0.1, 10.0)
-        self.nakliye_k_input.setDecimals(2)
-        self.nakliye_k_input.setValue(float(self.db.get_setting("nakliye_k") or 1.0))
-        params_form.addRow("Taşıma Katsayısı (K):", self.nakliye_k_input)
+        # Taşıma Katsayısı (K) - Motorlu araç poz 10.110.1003 (eski: 02.017)
+        k_layout = QHBoxLayout()
+        self.nakliye_k_input = QLineEdit()
+        self.nakliye_k_input.setPlaceholderText("Örn: 1750,00")
+        saved_k = self.db.get_setting("nakliye_k") or "1,00"
+        self.nakliye_k_input.setText(str(saved_k))
+        self.nakliye_k_input.setFixedWidth(120)
+        k_layout.addWidget(self.nakliye_k_input)
+
+        # PDF'den K değerini çekme butonu
+        self.fetch_k_btn = QPushButton("📥 PDF'den Çek")
+        self.fetch_k_btn.setToolTip("Poz No: 10.110.1003 (Eski: 02.017)\nHer cins ve tonajda motorlu araç taşıma katsayısı K")
+        self.fetch_k_btn.clicked.connect(self.fetch_k_from_pdf)
+        self.fetch_k_btn.setFixedWidth(110)
+        k_layout.addWidget(self.fetch_k_btn)
+
+        k_widget = QWidget()
+        k_widget.setLayout(k_layout)
+        params_form.addRow("Taşıma Katsayısı (K):", k_widget)
 
         # A Katsayısı (Taşıma Şartları)
         self.nakliye_a_input = QDoubleSpinBox()
@@ -3068,6 +3325,157 @@ class SettingsDialog(QDialog):
 
         # Toggle fields based on mode
         self.toggle_nakliye_fields()
+
+        # ===== TAB 5: AI PROMPTLARI =====
+        prompt_tab = QWidget()
+        prompt_layout = QVBoxLayout()
+
+        prompt_info = QLabel("⚠️ AI promptlarını özelleştirin. Varsayılan değerlere dönmek için 'Varsayılana Sıfırla' butonunu kullanın.")
+        prompt_info.setStyleSheet("color: #1565C0; background-color: #E3F2FD; padding: 8px; border-radius: 4px;")
+        prompt_info.setWordWrap(True)
+        prompt_layout.addWidget(prompt_info)
+
+        # Prompt seçimi
+        prompt_select_layout = QHBoxLayout()
+        prompt_select_layout.addWidget(QLabel("Prompt Türü:"))
+        self.prompt_type_combo = QComboBox()
+        self.prompt_type_combo.addItems(["📊 Analiz Promptu (Poz Analizi)", "📐 Metraj Promptu (Metraj Hesabı)"])
+        self.prompt_type_combo.currentIndexChanged.connect(self.on_prompt_type_changed)
+        prompt_select_layout.addWidget(self.prompt_type_combo)
+        prompt_select_layout.addStretch()
+        prompt_layout.addLayout(prompt_select_layout)
+
+        # Prompt düzenleme alanı
+        self.prompt_edit = QTextEdit()
+        self.prompt_edit.setPlaceholderText("AI promptu buraya yazılacak...")
+        self.prompt_edit.setStyleSheet("font-family: Consolas, monospace; font-size: 10pt;")
+        self.prompt_edit.setMinimumHeight(250)
+        prompt_layout.addWidget(self.prompt_edit)
+
+        # Değişken bilgisi
+        var_info = QLabel("""
+<b>Kullanılabilir Değişkenler:</b><br>
+<code>{description}</code> - Poz/imalat tanımı | <code>{unit}</code> - Birim | <code>{context_data}</code> - Bağlam verisi<br>
+<code>{nakliye_mesafe}</code> - Mesafe (m) | <code>{nakliye_k}</code> - K katsayısı | <code>{nakliye_a}</code> - A katsayısı<br>
+<code>{yogunluk_kum}</code>, <code>{yogunluk_moloz}</code>, <code>{yogunluk_beton}</code>, <code>{yogunluk_cimento}</code>, <code>{yogunluk_demir}</code> - Yoğunluklar<br>
+<code>{nakliye_km}</code> - Mesafe (km) | <code>{text}</code> - Metraj girdi metni
+        """)
+        var_info.setStyleSheet("background-color: #FFF8E1; padding: 8px; border-radius: 4px; font-size: 9pt;")
+        var_info.setWordWrap(True)
+        prompt_layout.addWidget(var_info)
+
+        # Butonlar
+        prompt_btn_layout = QHBoxLayout()
+
+        reset_prompt_btn = QPushButton("🔄 Varsayılana Sıfırla")
+        reset_prompt_btn.clicked.connect(self.reset_current_prompt)
+        prompt_btn_layout.addWidget(reset_prompt_btn)
+
+        reset_all_prompts_btn = QPushButton("🔄 Tüm Promptları Sıfırla")
+        reset_all_prompts_btn.clicked.connect(self.reset_all_prompts)
+        prompt_btn_layout.addWidget(reset_all_prompts_btn)
+
+        prompt_btn_layout.addStretch()
+        prompt_layout.addLayout(prompt_btn_layout)
+
+        prompt_tab.setLayout(prompt_layout)
+        self.tabs.addTab(prompt_tab, "📝 AI Promptları")
+
+        # İlk prompt'u yükle
+        self.load_current_prompt()
+
+        # ===== TAB 6: İMZA SAHİPLERİ =====
+        signatory_tab = QWidget()
+        signatory_layout = QVBoxLayout()
+
+        sig_info = QLabel("PDF raporlarında görünecek imza sahiplerinin bilgilerini girin.\n"
+                          "Bu bilgiler Keşif Özeti, Analiz vb. PDF çıktılarında otomatik olarak kullanılacaktır.")
+        sig_info.setWordWrap(True)
+        sig_info.setStyleSheet("color: #666; padding: 10px; background-color: #E3F2FD; border-radius: 5px;")
+        signatory_layout.addWidget(sig_info)
+
+        signatory_layout.addWidget(QLabel(""))  # Spacer
+
+        # İmza sahipleri form alanları
+        self.signatory_inputs = {}
+
+        # İşin Adı
+        signatory_layout.addWidget(QLabel("<b>🏗️ İşin Adı</b>"))
+        self.signatory_inputs['work_name'] = QLineEdit()
+        self.signatory_inputs['work_name'].setPlaceholderText("Örn: Okul İnşaatı Yapım İşi")
+        signatory_layout.addWidget(self.signatory_inputs['work_name'])
+        signatory_layout.addWidget(QLabel(""))  # Spacer
+
+        # Hazırlayan
+        signatory_layout.addWidget(QLabel("<b>📋 Hazırlayan</b>"))
+        hazirlayan_form = QFormLayout()
+        self.signatory_inputs['hazirlayan_title'] = QLineEdit()
+        self.signatory_inputs['hazirlayan_title'].setPlaceholderText("Örn: İnş. Müh.")
+        hazirlayan_form.addRow("Unvan:", self.signatory_inputs['hazirlayan_title'])
+        self.signatory_inputs['hazirlayan_name'] = QLineEdit()
+        self.signatory_inputs['hazirlayan_name'].setPlaceholderText("Örn: Ahmet YILMAZ")
+        hazirlayan_form.addRow("Ad Soyad:", self.signatory_inputs['hazirlayan_name'])
+        self.signatory_inputs['hazirlayan_position'] = QLineEdit()
+        self.signatory_inputs['hazirlayan_position'].setPlaceholderText("Örn: Proje Mühendisi")
+        hazirlayan_form.addRow("Görev:", self.signatory_inputs['hazirlayan_position'])
+        self.signatory_inputs['hazirlayan_date'] = QLineEdit()
+        self.signatory_inputs['hazirlayan_date'].setPlaceholderText("Tarih")
+        hazirlayan_form.addRow("Tarih:", self.signatory_inputs['hazirlayan_date'])
+        signatory_layout.addLayout(hazirlayan_form)
+
+        signatory_layout.addWidget(QLabel(""))  # Spacer
+
+        # Kontrol Edenler (3 adet)
+        signatory_layout.addWidget(QLabel("<b>🔍 Kontrol Edenler</b>"))
+
+        kontrol_grid = QGridLayout()
+        for i in range(1, 4):
+            kontrol_grid.addWidget(QLabel(f"<b>{i}. Kontrol</b>"), 0, i-1)
+
+            self.signatory_inputs[f'kontrol{i}_title'] = QLineEdit()
+            self.signatory_inputs[f'kontrol{i}_title'].setPlaceholderText("Unvan")
+            kontrol_grid.addWidget(self.signatory_inputs[f'kontrol{i}_title'], 1, i-1)
+
+            self.signatory_inputs[f'kontrol{i}_name'] = QLineEdit()
+            self.signatory_inputs[f'kontrol{i}_name'].setPlaceholderText("Ad Soyad")
+            kontrol_grid.addWidget(self.signatory_inputs[f'kontrol{i}_name'], 2, i-1)
+
+            self.signatory_inputs[f'kontrol{i}_position'] = QLineEdit()
+            self.signatory_inputs[f'kontrol{i}_position'].setPlaceholderText("Görev")
+            kontrol_grid.addWidget(self.signatory_inputs[f'kontrol{i}_position'], 3, i-1)
+
+            self.signatory_inputs[f'kontrol{i}_date'] = QLineEdit()
+            self.signatory_inputs[f'kontrol{i}_date'].setPlaceholderText("Tarih")
+            kontrol_grid.addWidget(self.signatory_inputs[f'kontrol{i}_date'], 4, i-1)
+
+        signatory_layout.addLayout(kontrol_grid)
+
+        signatory_layout.addWidget(QLabel(""))  # Spacer
+
+        # Onaylayan Amir
+        signatory_layout.addWidget(QLabel("<b>✅ Onaylayan Amir</b>"))
+        onaylayan_form = QFormLayout()
+        self.signatory_inputs['onaylayan_title'] = QLineEdit()
+        self.signatory_inputs['onaylayan_title'].setPlaceholderText("Örn: Y. İnş. Müh.")
+        onaylayan_form.addRow("Unvan:", self.signatory_inputs['onaylayan_title'])
+        self.signatory_inputs['onaylayan_name'] = QLineEdit()
+        self.signatory_inputs['onaylayan_name'].setPlaceholderText("Örn: Mehmet DEMİR")
+        onaylayan_form.addRow("Ad Soyad:", self.signatory_inputs['onaylayan_name'])
+        self.signatory_inputs['onaylayan_position'] = QLineEdit()
+        self.signatory_inputs['onaylayan_position'].setPlaceholderText("Örn: Şube Müdürü")
+        onaylayan_form.addRow("Görev:", self.signatory_inputs['onaylayan_position'])
+        self.signatory_inputs['onaylayan_date'] = QLineEdit()
+        self.signatory_inputs['onaylayan_date'].setPlaceholderText("Tarih")
+        onaylayan_form.addRow("Tarih:", self.signatory_inputs['onaylayan_date'])
+        signatory_layout.addLayout(onaylayan_form)
+
+        signatory_layout.addStretch()
+
+        signatory_tab.setLayout(signatory_layout)
+        self.tabs.addTab(signatory_tab, "✍️ İmza Sahipleri")
+
+        # İmza sahiplerini yükle
+        self.load_signatories()
 
         layout.addWidget(self.tabs)
 
@@ -3244,8 +3652,20 @@ class SettingsDialog(QDialog):
 
             if response.status_code == 200:
                 QMessageBox.information(self, "Başarılı", "✅ Bağlantı başarılı!")
+            elif response.status_code == 429:
+                QMessageBox.warning(self, "Rate Limit",
+                    "⚠️ Çok fazla istek gönderildi (429)!\n\n"
+                    "Olası nedenler:\n"
+                    "• Kısa sürede çok fazla test yapıldı\n"
+                    "• Ücretsiz API kullanım limitine ulaşıldı\n"
+                    "• Model şu an yoğun\n\n"
+                    "Birkaç dakika bekleyip tekrar deneyin.")
+            elif response.status_code == 401:
+                QMessageBox.critical(self, "Yetki Hatası",
+                    "❌ API anahtarı geçersiz (401)!\n\n"
+                    "Lütfen OpenRouter API anahtarınızı kontrol edin.")
             else:
-                QMessageBox.critical(self, "Hata", f"❌ Bağlantı başarısız!\nKod: {response.status_code}")
+                QMessageBox.critical(self, "Hata", f"❌ Bağlantı başarısız!\nKod: {response.status_code}\n{response.text[:200]}")
 
         except Exception as e:
             QMessageBox.critical(self, "Hata", f"❌ Bağlantı hatası: {str(e)}")
@@ -3276,6 +3696,182 @@ class SettingsDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Hata", f"❌ Bağlantı hatası: {str(e)}")
 
+    def _get_default_openrouter_models(self):
+        """Varsayılan OpenRouter model listesi"""
+        return [
+            "google/gemini-2.0-flash-exp:free",
+            "google/gemini-2.5-pro-exp-03-25:free",
+            "mistralai/devstral-2512:free",
+            "deepseek/deepseek-chat-v3-0324:free",
+            "meta-llama/llama-4-maverick:free",
+            "qwen/qwen3-235b-a22b:free",
+            "amazon/nova-2-lite-v1:free"
+        ]
+
+    def _get_default_gemini_models(self):
+        """Varsayılan Gemini model listesi"""
+        return [
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-8b",
+            "gemini-1.5-pro",
+            "gemini-pro"
+        ]
+
+    def fetch_openrouter_models(self):
+        """OpenRouter API'den model listesini çek ve önbelleğe al"""
+        import requests
+
+        self.refresh_or_models_btn.setEnabled(False)
+        self.refresh_or_models_btn.setText("⏳")
+        QApplication.processEvents()
+
+        try:
+            # OpenRouter models endpoint
+            url = "https://openrouter.ai/api/v1/models"
+            headers = {"Content-Type": "application/json"}
+
+            # API key varsa ekle (opsiyonel, bazı modeller için gerekli olabilir)
+            api_key = self.api_key_input.text().strip()
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+
+            response = requests.get(url, headers=headers, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+                models_data = data.get('data', [])
+
+                # Model ID'lerini al ve sırala
+                model_ids = []
+                for model in models_data:
+                    model_id = model.get('id', '')
+                    if model_id:
+                        # Pricing bilgisini kontrol et - ücretsiz olanları öne al
+                        pricing = model.get('pricing', {})
+                        prompt_price = float(pricing.get('prompt', '1') or '1')
+                        completion_price = float(pricing.get('completion', '1') or '1')
+
+                        is_free = prompt_price == 0 and completion_price == 0
+                        model_ids.append((model_id, is_free, model.get('name', model_id)))
+
+                # Ücretsiz olanları öne al, sonra isme göre sırala
+                model_ids.sort(key=lambda x: (not x[1], x[2].lower()))
+
+                # Sadece model ID'lerini al
+                final_models = [m[0] for m in model_ids]
+
+                if final_models:
+                    # Mevcut seçimi hatırla
+                    current_selection = self.model_input.currentText()
+
+                    # Combobox'ı güncelle
+                    self.model_input.clear()
+                    self.model_input.addItems(final_models)
+
+                    # Eski seçimi geri yükle
+                    if current_selection in final_models:
+                        self.model_input.setCurrentText(current_selection)
+                    else:
+                        self.model_input.setCurrentIndex(0)
+
+                    # Önbelleğe kaydet
+                    self.db.set_setting("openrouter_models_cache", json.dumps(final_models))
+                    self.db.set_setting("openrouter_models_cache_date", datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+                    QMessageBox.information(self, "Başarılı", f"✅ {len(final_models)} model yüklendi!\n(Ücretsiz modeller listenin başında)")
+                else:
+                    QMessageBox.warning(self, "Uyarı", "Model listesi boş döndü.")
+            elif response.status_code == 429:
+                QMessageBox.warning(self, "Rate Limit",
+                    "⚠️ Çok fazla istek (429)!\n\n"
+                    "Birkaç dakika bekleyip tekrar deneyin.\n"
+                    "Mevcut önbellekteki modeller kullanılmaya devam edecek.")
+            else:
+                QMessageBox.critical(self, "Hata", f"❌ API Hatası: {response.status_code}\n{response.text[:200]}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"❌ Bağlantı hatası: {str(e)}")
+
+        finally:
+            self.refresh_or_models_btn.setEnabled(True)
+            self.refresh_or_models_btn.setText("🔄")
+
+    def fetch_gemini_models(self):
+        """Google Gemini API'den model listesini çek ve önbelleğe al"""
+        import requests
+
+        api_key = self.gemini_key_input.text().strip()
+        if not api_key:
+            QMessageBox.warning(self, "Uyarı", "Model listesini çekmek için önce Google API anahtarı girin.")
+            return
+
+        self.refresh_gemini_models_btn.setEnabled(False)
+        self.refresh_gemini_models_btn.setText("⏳")
+        QApplication.processEvents()
+
+        try:
+            # Gemini models endpoint
+            url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+
+            response = requests.get(url, timeout=30)
+
+            if response.status_code == 200:
+                data = response.json()
+                models_data = data.get('models', [])
+
+                # generateContent destekleyen modelleri filtrele
+                model_names = []
+                for model in models_data:
+                    model_name = model.get('name', '').replace('models/', '')
+                    supported_methods = model.get('supportedGenerationMethods', [])
+
+                    # generateContent desteği olan modelleri al
+                    if 'generateContent' in supported_methods and model_name:
+                        # gemini- ile başlayanları tercih et
+                        if model_name.startswith('gemini'):
+                            model_names.append(model_name)
+
+                # Sırala (yeni modeller önce)
+                model_names.sort(key=lambda x: (
+                    '2.0' not in x,  # 2.0 modeller önce
+                    '1.5' not in x,  # sonra 1.5
+                    'flash' not in x,  # flash modeller önce
+                    x
+                ))
+
+                if model_names:
+                    # Mevcut seçimi hatırla
+                    current_selection = self.gemini_model_input.currentText()
+
+                    # Combobox'ı güncelle
+                    self.gemini_model_input.clear()
+                    self.gemini_model_input.addItems(model_names)
+
+                    # Eski seçimi geri yükle
+                    if current_selection in model_names:
+                        self.gemini_model_input.setCurrentText(current_selection)
+                    else:
+                        self.gemini_model_input.setCurrentIndex(0)
+
+                    # Önbelleğe kaydet
+                    self.db.set_setting("gemini_models_cache", json.dumps(model_names))
+                    self.db.set_setting("gemini_models_cache_date", datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+                    QMessageBox.information(self, "Başarılı", f"✅ {len(model_names)} model yüklendi!")
+                else:
+                    QMessageBox.warning(self, "Uyarı", "Uygun model bulunamadı.")
+            else:
+                QMessageBox.critical(self, "Hata", f"❌ API Hatası: {response.status_code}\n{response.text[:200]}")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"❌ Bağlantı hatası: {str(e)}")
+
+        finally:
+            self.refresh_gemini_models_btn.setEnabled(True)
+            self.refresh_gemini_models_btn.setText("🔄")
+
     def save_settings(self):
         key = self.api_key_input.text().strip()
         model = self.model_input.currentText().strip()
@@ -3302,7 +3898,7 @@ class SettingsDialog(QDialog):
         # Save Nakliye settings (KGM 2025)
         self.db.set_setting("nakliye_mode", self.nakliye_mode_combo.currentText())
         self.db.set_setting("nakliye_mesafe", str(self.nakliye_mesafe_input.value()))
-        self.db.set_setting("nakliye_k", str(self.nakliye_k_input.value()))
+        self.db.set_setting("nakliye_k", self.nakliye_k_input.text())
         self.db.set_setting("nakliye_a", str(self.nakliye_a_input.value()))
         self.db.set_setting("yogunluk_kum", str(self.yogunluk_kum_input.value()))
         self.db.set_setting("yogunluk_moloz", str(self.yogunluk_moloz_input.value()))
@@ -3310,8 +3906,343 @@ class SettingsDialog(QDialog):
         self.db.set_setting("yogunluk_cimento", str(self.yogunluk_cimento_input.value()))
         self.db.set_setting("yogunluk_demir", str(self.yogunluk_demir_input.value()))
 
+        # Save AI Prompts
+        current_prompt = self.prompt_edit.toPlainText()
+        prompt_type = self.prompt_type_combo.currentIndex()
+        if prompt_type == 0:
+            # Varsayılandan farklıysa kaydet
+            if current_prompt != self.get_default_analysis_prompt():
+                self.db.set_setting("custom_analysis_prompt", current_prompt)
+            else:
+                self.db.set_setting("custom_analysis_prompt", "")
+        else:
+            if current_prompt != self.get_default_metraj_prompt():
+                self.db.set_setting("custom_metraj_prompt", current_prompt)
+            else:
+                self.db.set_setting("custom_metraj_prompt", "")
+
+        # Save Signatories (İmza Sahipleri)
+        self.save_signatories()
+
         QMessageBox.information(self, "Başarılı", "Ayarlar kaydedildi.")
         self.accept()
+
+    def fetch_k_from_pdf(self):
+        """CSV verilerinden K katsayısını çek (Poz No: 10.110.1003 veya 02.017)"""
+        try:
+            # Ana uygulama penceresinin csv_manager'ına eriş
+            main_window = None
+            for widget in QApplication.topLevelWidgets():
+                if isinstance(widget, PDFSearchAppPyQt5):
+                    main_window = widget
+                    break
+
+            if not main_window or not main_window.csv_manager.poz_data:
+                QMessageBox.warning(self, "Uyarı",
+                    "CSV poz verileri yüklenmemiş!\n\n"
+                    "Önce 'CSV Poz Seçimi' sekmesinden CSV verilerini yükleyin.")
+                return
+
+            # K katsayısını bul
+            found_value, found_poz, found_desc = self.find_k_coefficient(main_window.csv_manager.poz_data)
+
+            if found_value:
+                # Türkçe formatla göster (1750.0 -> 1.750,00)
+                formatted_value = f"{found_value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                self.nakliye_k_input.setText(formatted_value)
+                QMessageBox.information(self, "Başarılı",
+                    f"K katsayısı CSV'den çekildi!\n\n"
+                    f"Poz No: {found_poz}\n"
+                    f"Açıklama: {found_desc[:60]}...\n"
+                    f"K Değeri: {formatted_value}")
+            else:
+                QMessageBox.warning(self, "Bulunamadı",
+                    "K katsayısı pozu bulunamadı!\n\n"
+                    "Aranan Poz No: 10.110.1003 veya 02.017\n"
+                    "(Her cins ve tonajda motorlu araç taşıma katsayısı K)\n\n"
+                    "CSV verilerinde bu poz mevcut değil.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"K katsayısı çekilirken hata oluştu:\n{str(e)}")
+
+    def find_k_coefficient(self, poz_data):
+        """Poz verilerinden K katsayısını bul ve döndür"""
+        # Öncelikli arama: Tam poz numarası eşleşmesi
+        priority_pozlar = ['10.110.1003', '02.017']
+
+        for target_poz in priority_pozlar:
+            if target_poz in poz_data:
+                poz_info = poz_data[target_poz]
+                unit_price = poz_info.get('unit_price', '')
+                if unit_price:
+                    value = self.parse_turkish_number(unit_price)
+                    if value and value > 0:
+                        return value, target_poz, poz_info.get('description', '')
+
+        # İkincil arama: Poz numarasında içeren
+        for poz_no, poz_info in poz_data.items():
+            if any(term in poz_no for term in priority_pozlar):
+                unit_price = poz_info.get('unit_price', '')
+                if unit_price:
+                    value = self.parse_turkish_number(unit_price)
+                    if value and value > 0:
+                        return value, poz_no, poz_info.get('description', '')
+
+        # Üçüncül arama: Açıklamada "motorlu araç taşıma katsayısı" geçen
+        for poz_no, poz_info in poz_data.items():
+            desc = poz_info.get('description', '').lower()
+            if 'motorlu araç' in desc and 'taşıma katsayısı' in desc:
+                unit_price = poz_info.get('unit_price', '')
+                if unit_price:
+                    value = self.parse_turkish_number(unit_price)
+                    if value and value > 0:
+                        return value, poz_no, poz_info.get('description', '')
+
+        return None, None, None
+
+    def parse_turkish_number(self, value_str):
+        """Türkçe sayı formatını parse et (1.750,00 -> 1750.00)"""
+        try:
+            if not value_str or str(value_str).lower() == 'nan':
+                return None
+
+            # String'e çevir ve temizle
+            clean = str(value_str).strip().replace(' ', '').replace('TL', '')
+
+            # Türkçe format: binlik ayraç nokta, ondalık virgül
+            # Örnek: 1.750,00 -> 1750.00
+            if ',' in clean:
+                # Noktaları kaldır (binlik ayraç), virgülü noktaya çevir
+                clean = clean.replace('.', '').replace(',', '.')
+
+            return float(clean)
+        except (ValueError, TypeError):
+            return None
+
+    def get_default_analysis_prompt(self):
+        """Varsayılan analiz promptunu döndür"""
+        return """Sen uzman bir Türk İnşaat Metraj ve Hakediş Mühendisisin.
+
+Görev: Aşağıdaki poz tanımı için "Çevre ve Şehircilik Bakanlığı" birim fiyat analiz formatına uygun detaylı bir analiz oluştur.
+
+Poz Tanımı: {description}
+Poz Birimi: {unit}
+
+EK BAĞLAM (MEVCUT KAYNAKLARDAN BULUNAN İLGİLİ POZLAR):
+{context_data}
+
+Kurallar:
+1. Analiz şu bileşenleri içermelidir:
+   - Malzeme (Örn: Çimento, Kum, Tuğla, vb.)
+   - İşçilik (Örn: Usta, Düz işçi)
+   - Makine (varsa - vinç, beton pompası, vb.)
+   - Nakliye (ZORUNLU - malzeme nakliyesi mutlaka hesaplanmalı)
+
+2. KGM 2025 NAKLİYE HESABI (Karayolları Genel Müdürlüğü Formülleri):
+   KULLANILACAK PARAMETRELER:
+   - Ortalama Taşıma Mesafesi (M): {nakliye_mesafe} metre ({nakliye_km:.1f} km)
+   - Taşıma Katsayısı (K): {nakliye_k}
+   - A Katsayısı (Taşıma Şartları): {nakliye_a}
+
+   MALZEME YOĞUNLUKLARI (Y - ton/m³):
+   - Kum, Çakıl, Stabilize, Kırmataş: {yogunluk_kum} ton/m³
+   - Anroşman, Moloz Taş: {yogunluk_moloz} ton/m³
+   - Beton, Prefabrik: {yogunluk_beton} ton/m³
+   - Çimento: {yogunluk_cimento} ton/m³
+   - Betonarme Demiri: {yogunluk_demir} ton/m³
+
+   NAKLİYE FORMÜLÜ (07.005/K - 10.000 m'ye kadar):
+   F = 1,25 × 0,00017 × K × M × Y × A  (m³ için)
+   F = 1,25 × 0,00017 × K × M × A      (ton için)
+
+   NAKLİYE FORMÜLÜ (07.006/K - 10.000 m'den fazla):
+   F = 1,25 × K × (0,0007 × M + 0,01) × Y × A  (m³ için)
+   F = 1,25 × K × (0,0007 × M + 0,01) × A      (ton için)
+
+   ÖNEMLİ:
+   - Her ağır malzeme (beton, çimento, demir, kum, çakıl) için nakliye kalemi AYRI SATIR olarak ekle
+   - Nakliye birim fiyatını yukarıdaki formüle göre hesapla
+   - Nakliye miktarı = Malzeme miktarı × Yoğunluk (ton cinsinden)
+   - Nakliye tipi: "type": "Nakliye" olarak belirt
+   - Nakliye kodu: "07.005/K" veya "07.006/K" kullan
+
+3. Miktarlar gerçekçi inşaat normlarına (analiz kitaplarına) dayanmalıdır.
+4. Birim fiyatlar 2024-2025 yılı ortalama piyasa rayiçleri (TL) olmalıdır.
+5. Çıktı SADECE geçerli bir JSON formatında olmalı.
+6. Lütfen JSON içindeki metin alanlarında çift tırnak (") kullanmaktan kaçının veya escape edin (\").
+
+JSON Formatı Şablonu:
+{{
+  "explanation": "Bu analizi oluştururken ... mantığını kullandım. Nakliye hesabını KGM 2025 formülüne göre şu şekilde yaptım: F = 1,25 × K × 0,00017 × M × Y × A = ... TL/ton",
+  "components": [
+      {{ "type": "Malzeme", "code": "10.xxx", "name": "Malzeme Adı", "unit": "kg/m³/adet", "quantity": 0.0, "unit_price": 0.0 }},
+      {{ "type": "İşçilik", "code": "01.xxx", "name": "İşçilik Adı", "unit": "sa", "quantity": 0.0, "unit_price": 0.0 }},
+      {{ "type": "Makine", "code": "03.xxx", "name": "Makine Adı", "unit": "sa", "quantity": 0.0, "unit_price": 0.0 }},
+      {{ "type": "Nakliye", "code": "07.005/K", "name": "Çimento Nakliyesi", "unit": "ton", "quantity": 0.0, "unit_price": 0.0 }},
+      {{ "type": "Nakliye", "code": "07.005/K", "name": "Demir Nakliyesi", "unit": "ton", "quantity": 0.0, "unit_price": 0.0 }}
+  ]
+}}
+
+Lütfen "explanation" kısmında neden bu malzemeleri ve miktarları seçtiğini, nakliye hesabını hangi formülle yaptığını detaylıca anlat."""
+
+    def get_default_metraj_prompt(self):
+        """Varsayılan metraj promptunu döndür"""
+        return """Sen uzman bir inşaat metraj mühendisisin.
+Görev: Verilen metinden TEK BİR İMALAT GRUBU oluştur ve bu gruba ait TÜM MALZEME METRAJLARINI (Beton, Kalıp, Demir, Kazı, Dolgu vb.) hesapla.
+
+Metin: "{text}"
+
+**ÖNEMLİ KURALLAR:**
+1. SADECE TEK BİR GRUP oluştur (örn: "Betonarme U Kanal", "İstinat Duvarı" vb.)
+2. Bu grubun altında TÜM malzeme metrajlarını ayrı satırlar olarak listele
+3. Her malzeme için: Beton, Kalıp, Demir, Kazı, Dolgu, vb. ayrı satır olacak
+
+**HESAPLAMA KURALLARI:**
+
+**Betonarme U Kanal (iç_genişlik: b, iç_yükseklik: h, duvar_kalınlık: t, taban_kalınlık: t0, uzunluk: L):**
+- Taban Betonu (m3): L × (b + 2×t) × t0
+- Yan Duvar Betonu (m3): L × t × h × 2
+- Toplam Beton (m3): Taban + Yan Duvarlar
+- İç Kalıp (m2): L × (b + 2×h) (taban + 2 yan iç yüzey)
+- Dış Kalıp (m2): L × 2 × h (2 yan dış yüzey)
+- Demir (ton): Toplam Beton × 0.10 (100 kg/m3)
+- Kazı (m3): L × (b + 2×t + 0.5) × (h + t0 + 0.3) (çalışma payı dahil)
+- Geri Dolgu (m3): Kazı - Beton hacmi
+
+**Betonarme İstinat Duvarı:**
+- Gövde Betonu (m3): L × H × t
+- Taban Betonu (m3): L × B × t0
+- Kalıp (m2): 2 × L × H (ön + arka yüzey)
+- Demir (ton): Toplam Beton × 0.10
+
+**Taş Duvar:**
+- Duvar Hacmi (m3): L × H × t
+- Harpuşta (m3): L × genişlik × kalınlık
+
+**ÇIKTI FORMATI (JSON):**
+{{
+  "explanation": "Hesaplama detayları ve varsayımlar. Örn: U Kanal için L=1m, iç genişlik=3m, iç yükseklik=2m, duvar kalınlığı=0.3m, taban kalınlığı=0.5m kabul edilmiştir. Taban betonu: 1×(3+0.6)×0.5=1.8m3...",
+  "groups": [
+      {{
+        "group_name": "İmalat Adı (örn: Betonarme U Kanal)",
+        "unit": "",
+        "items": [
+          {{"description": "Taban Betonu", "similar_count": 1, "length": 1.0, "width": 3.6, "height": 0.5, "quantity": 1.8, "unit": "m3", "notes": "L×(b+2t)×t0 = 1×3.6×0.5"}},
+          {{"description": "Yan Duvar Betonu", "similar_count": 2, "length": 1.0, "width": 0.3, "height": 2.0, "quantity": 1.2, "unit": "m3", "notes": "L×t×h×2 = 1×0.3×2×2"}},
+          {{"description": "İç Kalıp", "similar_count": 1, "length": 1.0, "width": 7.0, "height": 1.0, "quantity": 7.0, "unit": "m2", "notes": "L×(b+2h) = 1×(3+4)"}},
+          {{"description": "Dış Kalıp", "similar_count": 2, "length": 1.0, "width": 2.0, "height": 1.0, "quantity": 4.0, "unit": "m2", "notes": "L×h×2 = 1×2×2"}},
+          {{"description": "Betonarme Demiri", "similar_count": 1, "length": 1.0, "width": 1.0, "height": 1.0, "quantity": 0.30, "unit": "ton", "notes": "Toplam beton × 0.10"}},
+          {{"description": "Kazı", "similar_count": 1, "length": 1.0, "width": 4.1, "height": 2.8, "quantity": 11.48, "unit": "m3", "notes": "Çalışma payı dahil"}},
+          {{"description": "Geri Dolgu", "similar_count": 1, "length": 1.0, "width": 1.0, "height": 1.0, "quantity": 8.48, "unit": "m3", "notes": "Kazı - Beton"}}
+        ]
+      }}
+  ]
+}}
+
+**DİKKAT:**
+- SADECE 1 GRUP olacak, birden fazla grup OLUŞTURMA
+- Her malzeme türü (beton, kalıp, demir, kazı, dolgu) ayrı bir satır/item olacak
+- Hesaplamaları "notes" alanında göster
+- "explanation" alanı ZORUNLU ve detaylı olmalı"""
+
+    def on_prompt_type_changed(self):
+        """Prompt türü değiştiğinde ilgili promptu yükle"""
+        self.load_current_prompt()
+
+    def load_current_prompt(self):
+        """Seçili prompt türünü yükle"""
+        prompt_type = self.prompt_type_combo.currentIndex()
+
+        if prompt_type == 0:  # Analiz Promptu
+            saved_prompt = self.db.get_setting("custom_analysis_prompt")
+            if saved_prompt:
+                self.prompt_edit.setPlainText(saved_prompt)
+            else:
+                self.prompt_edit.setPlainText(self.get_default_analysis_prompt())
+        else:  # Metraj Promptu
+            saved_prompt = self.db.get_setting("custom_metraj_prompt")
+            if saved_prompt:
+                self.prompt_edit.setPlainText(saved_prompt)
+            else:
+                self.prompt_edit.setPlainText(self.get_default_metraj_prompt())
+
+    def reset_current_prompt(self):
+        """Mevcut promptu varsayılana sıfırla"""
+        prompt_type = self.prompt_type_combo.currentIndex()
+
+        reply = QMessageBox.question(self, "Onay",
+            "Bu promptu varsayılan değere sıfırlamak istediğinize emin misiniz?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+            if prompt_type == 0:
+                self.prompt_edit.setPlainText(self.get_default_analysis_prompt())
+                self.db.set_setting("custom_analysis_prompt", "")
+            else:
+                self.prompt_edit.setPlainText(self.get_default_metraj_prompt())
+                self.db.set_setting("custom_metraj_prompt", "")
+
+            QMessageBox.information(self, "Başarılı", "Prompt varsayılan değere sıfırlandı.")
+
+    def reset_all_prompts(self):
+        """Tüm promptları varsayılana sıfırla"""
+        reply = QMessageBox.question(self, "Onay",
+            "TÜM AI promptlarını varsayılan değerlere sıfırlamak istediğinize emin misiniz?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+            self.db.set_setting("custom_analysis_prompt", "")
+            self.db.set_setting("custom_metraj_prompt", "")
+            self.load_current_prompt()
+            QMessageBox.information(self, "Başarılı", "Tüm promptlar varsayılan değerlere sıfırlandı.")
+
+    def load_signatories(self):
+        """Veritabanından imza sahiplerini yükle"""
+        signatories = self.db.get_signatories()
+
+        for sig in signatories:
+            role = sig['role']
+            title = sig.get('title', '')
+            full_name = sig.get('full_name', '')
+            position = sig.get('position', '')
+
+            # İlgili input alanlarına yükle
+            if f'{role}_title' in self.signatory_inputs:
+                self.signatory_inputs[f'{role}_title'].setText(title)
+            if f'{role}_name' in self.signatory_inputs:
+                self.signatory_inputs[f'{role}_name'].setText(full_name)
+            if f'{role}_position' in self.signatory_inputs:
+                self.signatory_inputs[f'{role}_position'].setText(position)
+            if f'{role}_date' in self.signatory_inputs:
+                self.signatory_inputs[f'{role}_date'].setText(sig.get('date_text', ''))
+
+        # İşin adını yükle
+        work_name = self.db.get_setting("work_name")
+        if work_name and 'work_name' in self.signatory_inputs:
+            self.signatory_inputs['work_name'].setText(work_name)
+
+    def save_signatories(self):
+        """İmza sahiplerini veritabanına kaydet"""
+        roles = ['hazirlayan', 'kontrol1', 'kontrol2', 'kontrol3', 'onaylayan']
+
+        for role in roles:
+            title = self.signatory_inputs.get(f'{role}_title')
+            name = self.signatory_inputs.get(f'{role}_name')
+            position = self.signatory_inputs.get(f'{role}_position')
+            date_input = self.signatory_inputs.get(f'{role}_date')
+
+            if title and name and position:
+                self.db.update_signatory(
+                    role,
+                    title.text().strip(),
+                    name.text().strip(),
+                    position.text().strip(),
+                    date_input.text().strip() if date_input else ""
+                )
+        
+        # İşin adını kaydet
+        if 'work_name' in self.signatory_inputs:
+            self.db.set_setting("work_name", self.signatory_inputs['work_name'].text().strip())
 
     def toggle_nakliye_fields(self):
         """Nakliye modu değiştiğinde alanları aktif/pasif yap"""
@@ -3325,6 +4256,7 @@ class SettingsDialog(QDialog):
         self.yogunluk_beton_input.setEnabled(is_manual)
         self.yogunluk_cimento_input.setEnabled(is_manual)
         self.yogunluk_demir_input.setEnabled(is_manual)
+        self.fetch_k_btn.setEnabled(is_manual)
 
 class PDFSearchAppPyQt5(QMainWindow):
     def __init__(self):
@@ -3532,26 +4464,67 @@ class PDFSearchAppPyQt5(QMainWindow):
 
     def start_delayed_loading(self):
         """Ağır yükleme işlemlerini başlat"""
-        self.file_label.setText("🚀 CSV verileri taranıyor...")
-        
-        # Async CSV Load
+        self.file_label.setText("🚀 CSV ve PDF verileri taranıyor...")
+        self.loaded_source_files = []  # Yüklenen dosya listesi
+
+        # Async CSV + PDF Load
         self.csv_loader = CSVLoaderThread(self.csv_manager.csv_folder)
         self.csv_loader.finished.connect(self.on_csv_loaded)
-        self.csv_loader.error.connect(lambda e: self.file_label.setText(f"CSV Hatası: {e}"))
+        self.csv_loader.progress.connect(lambda msg: self.file_label.setText(f"🔄 {msg}"))
+        self.csv_loader.error.connect(lambda e: self.file_label.setText(f"Hata: {e}"))
         self.csv_loader.start()
-        
-    def on_csv_loaded(self, data, count):
-        """CSV yükleme tamamlandı"""
+
+    def on_csv_loaded(self, data, count, loaded_files):
+        """CSV ve PDF yükleme tamamlandı"""
         self.csv_manager.poz_data = data
-        self.file_label.setText(f"✅ CSV Hazır: {count} poz yüklendi")
-        
+        self.loaded_source_files = loaded_files
+
+        # Dosya bilgisi özeti oluştur
+        csv_count = sum(1 for f in loaded_files if f['type'] == 'CSV')
+        pdf_count = sum(1 for f in loaded_files if f['type'] == 'PDF')
+        total_files = len(loaded_files)
+
+        self.file_label.setText(f"✅ Hazır: {count} poz ({csv_count} CSV, {pdf_count} PDF dosyasından)")
+
         # UI Tablosunu güncelle
         self.csv_poz_data = list(data.values())
         if hasattr(self, 'csv_poz_table'):
             self.display_csv_pozlar(self.csv_poz_data)
-        
+
+        # Yüklenen dosyalar bilgisini güncelle (CSV sekmesinde)
+        if hasattr(self, 'loaded_files_label'):
+            files_text = self.format_loaded_files_text(loaded_files)
+            self.loaded_files_label.setText(files_text)
+
         # 2. PDF Cache Load (Bundan sonra başlasın)
         QTimer.singleShot(100, self.load_pdfs_with_cache)
+
+    def format_loaded_files_text(self, loaded_files):
+        """Yüklenen dosyalar için bilgi metni oluştur"""
+        if not loaded_files:
+            return "Yüklenen dosya yok"
+
+        csv_files = [f for f in loaded_files if f['type'] == 'CSV']
+        pdf_files = [f for f in loaded_files if f['type'] == 'PDF']
+
+        lines = []
+        lines.append(f"📁 Toplam {len(loaded_files)} dosya yüklendi:")
+
+        if csv_files:
+            lines.append(f"\n📄 CSV ({len(csv_files)} dosya):")
+            for f in csv_files[:5]:  # İlk 5 dosya
+                lines.append(f"  • {f['name']} ({f['poz_count']} poz)")
+            if len(csv_files) > 5:
+                lines.append(f"  ... ve {len(csv_files) - 5} dosya daha")
+
+        if pdf_files:
+            lines.append(f"\n📕 PDF ({len(pdf_files)} dosya):")
+            for f in pdf_files[:5]:  # İlk 5 dosya
+                lines.append(f"  • {f['name']} ({f['poz_count']} poz)")
+            if len(pdf_files) > 5:
+                lines.append(f"  ... ve {len(pdf_files) - 5} dosya daha")
+
+        return "\n".join(lines)
 
     def setup_ui(self):
         """UI kurulumu"""
@@ -4031,20 +5004,29 @@ class PDFSearchAppPyQt5(QMainWindow):
         except Exception as e:
             self._on_refresh_error(str(e))
 
-    def _on_refresh_complete(self, data, count):
+    def _on_refresh_complete(self, data, count, loaded_files):
         """Yenileme tamamlandığında"""
         self.csv_manager.poz_data = data
         self.csv_poz_data = list(data.values())
+        self.loaded_source_files = loaded_files
 
         if hasattr(self, 'csv_poz_table'):
             self.display_csv_pozlar(self.csv_poz_data)
 
-        self.file_label.setText(f"✅ Veriler güncellendi: {count} poz yüklendi")
+        # Yüklenen dosyalar bilgisini güncelle
+        if hasattr(self, 'loaded_files_label'):
+            files_text = self.format_loaded_files_text(loaded_files)
+            self.loaded_files_label.setText(files_text)
+
+        csv_count = sum(1 for f in loaded_files if f['type'] == 'CSV')
+        pdf_count = sum(1 for f in loaded_files if f['type'] == 'PDF')
+
+        self.file_label.setText(f"✅ Veriler güncellendi: {count} poz ({csv_count} CSV, {pdf_count} PDF)")
         self.update_btn.setEnabled(True)
         self.update_btn.setText("🔄 Verileri Güncelle")
 
         QMessageBox.information(self, "Güncelleme Tamamlandı",
-                                f"Veriler başarıyla güncellendi.\n{count} poz yüklendi.")
+                                f"Veriler başarıyla güncellendi.\n{count} poz yüklendi.\n({csv_count} CSV, {pdf_count} PDF dosyasından)")
 
     def _on_refresh_error(self, error):
         """Yenileme hatası"""
@@ -4414,6 +5396,26 @@ class PDFSearchAppPyQt5(QMainWindow):
         except Exception as e:
             self.file_label.setText(f"CSV yükleme hatası: {str(e)}")
 
+    def force_reload_poz_data(self):
+        """Cache'i temizle ve tüm dosyaları yeniden yükle"""
+        try:
+            # Cache dosyasını sil
+            cache_file = Path(__file__).parent / "cache" / "poz_data_cache.json"
+            if cache_file.exists():
+                cache_file.unlink()
+                self.file_label.setText("🗑️ Cache temizlendi, yeniden yükleniyor...")
+
+            # Yüklenen dosyalar bilgisini sıfırla
+            if hasattr(self, 'loaded_files_label'):
+                self.loaded_files_label.setText("📁 Dosyalar yeniden yükleniyor...")
+
+            # Yeniden yükle
+            self.csv_manager.poz_data = {}
+            self.start_delayed_loading()
+
+        except Exception as e:
+            self.file_label.setText(f"Yenileme hatası: {str(e)}")
+
     def clear_results(self):
         """Sonuçları temizle"""
         self.results_table.setRowCount(0)
@@ -4427,6 +5429,33 @@ class PDFSearchAppPyQt5(QMainWindow):
 
         tab_layout = QVBoxLayout()
         self.csv_selection_tab.setLayout(tab_layout)
+
+        # Üst bilgi bölümü - Yüklenen dosyalar
+        info_layout = QHBoxLayout()
+
+        # Yüklenen dosyalar bilgisi (sol)
+        self.loaded_files_label = QLabel("📁 Dosyalar yükleniyor...")
+        self.loaded_files_label.setStyleSheet("""
+            QLabel {
+                background-color: #E3F2FD;
+                border: 1px solid #90CAF9;
+                border-radius: 4px;
+                padding: 8px;
+                font-size: 9pt;
+            }
+        """)
+        self.loaded_files_label.setWordWrap(True)
+        self.loaded_files_label.setMinimumHeight(80)
+        info_layout.addWidget(self.loaded_files_label, stretch=2)
+
+        # Yenile butonu (sağ)
+        refresh_btn = QPushButton("🔄 Verileri Yenile")
+        refresh_btn.setToolTip("PDF klasöründeki tüm dosyaları yeniden tara")
+        refresh_btn.clicked.connect(self.force_reload_poz_data)
+        refresh_btn.setFixedWidth(130)
+        info_layout.addWidget(refresh_btn)
+
+        tab_layout.addLayout(info_layout)
 
         # Arama bölümü
         search_layout = QHBoxLayout()

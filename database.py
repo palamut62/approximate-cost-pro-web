@@ -185,6 +185,40 @@ class DatabaseManager:
         except:
             pass
 
+        # İmza Sahipleri Tablosu (Kontrol Eden ve Onaylayan)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS signatories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                title TEXT,
+                full_name TEXT,
+                position TEXT,
+                date_text TEXT,
+                order_num INTEGER DEFAULT 0
+            )
+        ''')
+
+        # Migration: Add date_text to signatories if not exists
+        try:
+            cursor.execute('ALTER TABLE signatories ADD COLUMN date_text TEXT')
+        except:
+            pass
+
+        # Varsayılan imza sahiplerini ekle (eğer yoksa)
+        cursor.execute('SELECT COUNT(*) FROM signatories')
+        if cursor.fetchone()[0] == 0:
+            default_signatories = [
+                ('hazirlayan', '', '', 'Hazırlayan', '', 0),
+                ('kontrol1', '', '', '1. Kontrol Eden', '', 1),
+                ('kontrol2', '', '', '2. Kontrol Eden', '', 2),
+                ('kontrol3', '', '', '3. Kontrol Eden', '', 3),
+                ('onaylayan', '', '', 'Onaylayan Amir', '', 4),
+            ]
+            cursor.executemany('''
+                INSERT INTO signatories (role, title, full_name, position, date_text, order_num)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', default_signatories)
+
         conn.commit()
         conn.close()
 
@@ -743,12 +777,60 @@ class DatabaseManager:
     def update_quantity_takeoff(self, takeoff_id, description, similar_count, length, width, height, quantity, unit, notes):
         conn = self.get_connection()
         cursor = conn.cursor()
-        
+
         cursor.execute('''
-            UPDATE quantity_takeoffs 
+            UPDATE quantity_takeoffs
             SET description = ?, similar_count = ?, length = ?, width = ?, height = ?, quantity = ?, unit = ?, notes = ?
             WHERE id = ?
         ''', (description, similar_count, length, width, height, quantity, unit, notes, takeoff_id))
-        
+
         conn.commit()
         conn.close()
+
+    # --- Signatory Methods (İmza Sahipleri) ---
+    def get_signatories(self):
+        """Tüm imza sahiplerini getir"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM signatories ORDER BY order_num')
+        columns = [description[0] for description in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def get_signatory_by_role(self, role):
+        """Belirli bir role göre imza sahibini getir"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM signatories WHERE role = ?', (role,))
+        columns = [description[0] for description in cursor.description]
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return dict(zip(columns, row))
+        return None
+
+    def update_signatory(self, role, title, full_name, position, date_text=""):
+        """İmza sahibi bilgilerini güncelle"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE signatories
+            SET title = ?, full_name = ?, position = ?, date_text = ?
+            WHERE role = ?
+        ''', (title, full_name, position, date_text, role))
+        conn.commit()
+        conn.close()
+
+    def get_all_signatories_for_pdf(self):
+        """PDF için tüm imza sahiplerini formatlanmış olarak getir"""
+        signatories = self.get_signatories()
+        result = {}
+        for sig in signatories:
+            result[sig['role']] = {
+                'title': sig.get('title', ''),
+                'full_name': sig.get('full_name', ''),
+                'position': sig.get('position', ''),
+                'date_text': sig.get('date_text', '')
+            }
+        return result

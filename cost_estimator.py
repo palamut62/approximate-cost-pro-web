@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt5.QtCore import Qt, pyqtSignal, QDate
 from PyQt5.QtGui import QFont
 from database import DatabaseManager
+from datetime import datetime
 
 
 class ProjectDialog(QDialog):
@@ -560,6 +561,12 @@ class CostEstimator(QWidget):
 
         actions_layout.addStretch()
 
+        # PDF Export butonu
+        export_pdf_btn = QPushButton("📄 PDF Olarak Kaydet")
+        export_pdf_btn.setStyleSheet("background-color: #1976D2; color: white; font-weight: bold; padding: 8px;")
+        export_pdf_btn.clicked.connect(self.export_to_pdf)
+        actions_layout.addWidget(export_pdf_btn)
+
         # Yaklaşık Maliyeti Sıfırla butonu
         reset_btn = QPushButton("⚠️ Maliyeti Sıfırla")
         reset_btn.setStyleSheet("background-color: #FF5722; color: white; font-weight: bold; padding: 8px;")
@@ -880,3 +887,80 @@ class CostEstimator(QWidget):
     def has_active_project(self):
         """Aktif proje var mı?"""
         return self.current_project_id is not None
+
+    def export_to_pdf(self):
+        """Keşif Özeti'ni PDF olarak kaydet"""
+        if not self.current_project_id:
+            QMessageBox.warning(self, "Uyarı", "Lütfen önce bir proje seçin!")
+            return
+
+        # Proje bilgilerini al
+        project = self.db.get_project(self.current_project_id)
+        if not project:
+            QMessageBox.warning(self, "Uyarı", "Proje bilgileri alınamadı!")
+            return
+
+        # Kalem sayısını kontrol et
+        items = self.db.get_project_items(self.current_project_id)
+        if not items:
+            QMessageBox.warning(self, "Uyarı", "Projede henüz kalem bulunmuyor!")
+            return
+
+        # Dosya kaydetme dialogu
+        from PyQt5.QtWidgets import QFileDialog
+        default_name = f"Kesif_Ozeti_{project.get('name', 'Proje').replace(' ', '_')}_{datetime.now().strftime('%Y%m%d')}.pdf"
+
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "PDF Olarak Kaydet",
+            default_name,
+            "PDF Dosyası (*.pdf)"
+        )
+
+        if not filepath:
+            return
+
+        try:
+            from pdf_exporter import PDFExporter
+
+            exporter = PDFExporter()
+
+            # Proje bilgilerini hazırla
+            project_info = {
+                'name': project.get('name', '-'),
+                'employer': project.get('employer', '-'),
+                'contractor': project.get('contractor', '-'),
+                'location': project.get('location', '-'),
+                'date': project.get('project_date', datetime.now().strftime("%d.%m.%Y"))
+            }
+
+            # Toplamı hesapla
+            total = sum(float(item.get('total_price', 0)) for item in items)
+            totals = {
+                'total': total,
+                'kdv': total * 0.20,
+                'genel_toplam': total * 1.20
+            }
+
+            # İmza sahiplerini al
+            signatories = self.db.get_all_signatories_for_pdf()
+
+            # İşin adını ayarlardan al ve projeye ekle (Override)
+            work_name = self.db.get_setting("work_name")
+            if work_name:
+                project_info['name'] = work_name
+
+            # PDF oluştur
+            success = exporter.export_kesif_ozeti(filepath, project_info, items, totals, signatories)
+
+            if success:
+                QMessageBox.information(self, "Başarılı", f"PDF başarıyla kaydedildi:\n{filepath}")
+
+                # PDF'i aç
+                import os
+                os.startfile(filepath)
+            else:
+                QMessageBox.critical(self, "Hata", "PDF oluşturulurken bir hata oluştu!")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"PDF oluşturma hatası:\n{str(e)}")
