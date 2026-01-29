@@ -5,6 +5,7 @@ import { Sparkles, Loader2, Plus, Save, FileDown, Trash2, Info, Calculator, Grad
 import api from '@/lib/api';
 import { useCart } from '@/context/CartContext';
 import { useNotification } from '@/context/NotificationContext';
+import { useLLMUsage } from '@/context/LLMUsageContext';
 import { cn } from '@/lib/utils';
 import * as XLSX from 'xlsx';
 
@@ -36,6 +37,7 @@ export default function AnalysisPage() {
     const [analysisName, setAnalysisName] = useState("");
     const { addItem } = useCart();
     const { showNotification } = useNotification();
+    const { refetch: refetchLLMUsage } = useLLMUsage();
 
     // Feedback modal states
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
@@ -62,6 +64,8 @@ export default function AnalysisPage() {
             setResult({ ...res.data, components });
             setDisplayUnit(res.data.unit || res.data.suggested_unit || "m2");
             setAnalysisName(description);
+            // AI isteğinden sonra kullanım verilerini güncelle
+            refetchLLMUsage();
         } catch (e: any) {
             console.error(e);
             showNotification("Analiz sırasında bir hata oluştu: " + (e.response?.data?.detail || e.message), "error");
@@ -191,6 +195,8 @@ export default function AnalysisPage() {
             if (res.data.refined_text) {
                 setCorrectionDescription(res.data.refined_text);
             }
+            // AI isteğinden sonra kullanım verilerini güncelle
+            refetchLLMUsage();
         } catch (e) {
             console.error(e);
             showNotification("İyileştirme sırasında hata oluştu.", "error");
