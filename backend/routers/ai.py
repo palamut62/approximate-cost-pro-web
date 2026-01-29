@@ -380,6 +380,99 @@ def match_prices_from_poz_data(result: Dict) -> Dict:
 # ANA API ENDPOINT
 # ============================================
 
+
+# ============================================
+# VALIDATION LOGIC (Beton/Betonarme Kontrolü)
+# ============================================
+
+def validate_beton_betonarme(components: List[Dict], description: str) -> List[Dict]:
+    """
+    Beton ve betonarme ayrımını kontrol et ve gerekirse düzelt
+    Desktop uygulamasındaki mantığın aynısı
+    """
+    if not components:
+        return components
+
+    desc_lower = description.lower()
+
+    # Beton mu betonarme mi tespit et
+    is_betonarme = any(keyword in desc_lower for keyword in [
+        'betonarme', 'betonarm', 'donatı', 'donatılı', 'hasır', 'armatüre',
+        'armature', 'reinforced', 'demir', 'nervürlü'
+    ])
+
+    is_beton = any(keyword in desc_lower for keyword in [
+        'beton', 'concrete'
+    ])
+
+    # BETON (donatısız) ise
+    if is_beton and not is_betonarme:
+        # Demir varsa KALDIR
+        original_count = len(components)
+        components = [
+            comp for comp in components
+            if not any(kw in comp.get('name', '').lower() for kw in [
+                'demir', 'donatı', 'nervürlü', 'hasır', 'çelik', 'armatür'
+            ])
+        ]
+
+        if len(components) < original_count:
+            print(f"[VALIDATION] {original_count - len(components)} demir kalemi kaldırıldı (beton donatısız)")
+
+        # Kalıp var mı kontrol et
+        has_kalip = any('kalıp' in comp.get('name', '').lower() for comp in components)
+        has_beton = any('beton' in comp.get('name', '').lower() for comp in components if comp.get('type', '').lower() == 'malzeme')
+
+        if has_beton and not has_kalip:
+            # Kalıp ekle
+            components.append({
+                'type': 'Malzeme',
+                'code': '04.001.1001',
+                'name': 'Ahşap Kalıp',
+                'unit': 'm²',
+                'quantity': 0.0,
+                'unit_price': 50.0,
+                'total_price': 0.0,
+                'price_source': 'validation_rule',
+                'notes': '[OTOMATIK EKLENDI] Beton için kalıp zorunludur'
+            })
+
+    # BETONARME ise
+    elif is_betonarme:
+        # Zorunlu malzemeler kontrolü
+        has_beton = any('beton' in comp.get('name', '').lower() for comp in components if comp.get('type', '').lower() == 'malzeme')
+        has_demir = any(kw in comp.get('name', '').lower() for kw in ['demir', 'donatı', 'nervürlü', 'hasır', 'çelik'] for comp in components if comp.get('type', '').lower() == 'malzeme')
+        has_kalip = any('kalıp' in comp.get('name', '').lower() for comp in components)
+
+        # Eksik malzemeleri ekle
+        if has_beton and not has_demir:
+            components.append({
+                'type': 'Malzeme',
+                'code': '10.140.1001',
+                'name': 'Nervürlü Betonarme Çeliği S420',
+                'unit': 'ton',
+                'quantity': 0.0,
+                'unit_price': 25000.0,
+                'total_price': 0.0,
+                'price_source': 'validation_rule',
+                'notes': '[OTOMATIK EKLENDI] Betonarme için demir zorunludur'
+            })
+
+        if has_beton and not has_kalip:
+            components.append({
+                'type': 'Malzeme',
+                'code': '04.001.1001',
+                'name': 'Ahşap Kalıp',
+                'unit': 'm²',
+                'quantity': 0.0,
+                'unit_price': 50.0,
+                'total_price': 0.0,
+                'price_source': 'validation_rule',
+                'notes': '[OTOMATIK EKLENDI] Betonarme için kalıp zorunludur'
+            })
+
+    return components
+
 @router.post("/analyze")
 async def analyze_poz(request: AnalysisRequest):
     """
@@ -414,7 +507,11 @@ async def analyze_poz(request: AnalysisRequest):
             context_data=full_context
         )
 
-        # 5. PDF verilerinden birim fiyatları eşleştir
+        # 5. POZ_DATA (Validasyon Sonrası)
+        if "components" in result:
+             result["components"] = validate_beton_betonarme(result["components"], request.description)
+
+        # 6. PDF verilerinden birim fiyatları eşleştir
         result = match_prices_from_poz_data(result)
 
         # 6. Özet bilgi ekle

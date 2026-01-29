@@ -21,7 +21,7 @@ if root_dir not in sys.path:
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from services.data_manager import CSVLoader
-from routers import ai, projects, analyses, feedback
+from routers import ai, projects, analyses, feedback, settings
 from database import DatabaseManager
 
 app = FastAPI(title="Approximate Cost API", version="1.0.0")
@@ -31,6 +31,7 @@ app.include_router(ai.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
 app.include_router(analyses.router, prefix="/api")
 app.include_router(feedback.router, prefix="/api")
+app.include_router(settings.router, prefix="/api")
 
 # CORS Setup
 app.add_middleware(

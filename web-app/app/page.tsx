@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import api from '@/lib/api';
-import { FileText, Database, Activity, Clock, ArrowRight } from 'lucide-react';
+import { FileText, Database, Activity, Clock, ArrowRight, Truck } from 'lucide-react';
 import Link from 'next/link';
 
 export default function Home() {
@@ -55,6 +55,25 @@ export default function Home() {
           loading={false}
           valueClass="text-green-600"
         />
+      </div>
+
+      <div className="space-y-4">
+        <h2 className="text-xl font-bold text-slate-800">Hızlı Araçlar</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Link
+            href="/transport"
+            className="p-5 bg-white rounded-xl border border-slate-200 hover:border-blue-400 hover:shadow-md transition-all group flex items-center space-x-4"
+          >
+            <div className="p-3 bg-orange-50 text-orange-600 rounded-lg group-hover:bg-orange-100 transition-colors">
+              <Truck className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-800 group-hover:text-blue-600 transition-colors">Nakliye Hesaplama</h3>
+              <p className="text-xs text-slate-500 mt-1">KGM 2025 formülleri ile</p>
+            </div>
+            <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-blue-500 ml-auto transition-colors" />
+          </Link>
+        </div>
       </div>
 
       <div className="space-y-4">

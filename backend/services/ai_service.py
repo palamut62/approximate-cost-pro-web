@@ -63,6 +63,27 @@ Aşağıdaki poz tanımı için detaylı birim fiyat analizi oluştur:
                         KURALLAR
 ═══════════════════════════════════════════════════════════════
 
+⚠️ KRİTİK UYARI - BETON VE BETONARME FARKI:
+
+🔴 EĞER POZ AÇIKLAMASINDA "BETON" YAZIYORSA VE "BETONARME/DONATILI/DEMİR" YAZMIYORSA:
+   → Bu DONATISIZ BETON'dur (Yalın beton, düz beton)
+   → SADECE: Beton + Kalıp + İşçilik
+   → ❌ ASLA DEMİR EKLEME! Donatı yok!
+
+🟢 EĞER POZ AÇIKLAMASINDA "BETONARME/DONATILI/HASIR/ARMATURELİ" YAZIYORSA:
+   → Bu BETONARME'dir
+   → ZORUNLU: Beton + Demir + Kalıp + İşçilik
+   → ✅ Mutlaka demir ekle!
+
+ÖRNEKLER:
+✅ "Beton trapez" → BETON + KALIP (demir yok!)
+✅ "C20/25 yalın beton" → BETON + KALIP (demir yok!)
+✅ "Düz beton döşeme" → BETON + KALIP (demir yok!)
+❌ "Betonarme temel" → BETON + DEMİR + KALIP
+❌ "Hasır donatılı döşeme" → BETON + DEMİR + KALIP
+
+═══════════════════════════════════════════════════════════════
+
 1. POZ KODLARI (ÇŞB 2025 STANDARDI):
    ⚠️ ÇOK ÖNEMLİ: Aşağıdaki KOD YAPILARINI kesinlikle kullan:
 
