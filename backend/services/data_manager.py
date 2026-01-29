@@ -723,72 +723,121 @@ class CSVLoader:
                         r'^(\d{2}\.\d{3})',         # 02.017
                         r'^([A-Z]{1,3}\.\d{2,3}\.\d{3})',  # Y.15.140
                         r'^([A-Z]{2,3}\.\d{3})',  # MSB.700
+                        r'^(\d{3}-\d{3})', # KGM: 715-104
+                        r'^([A-Z0-9/]+\.\d+)', # Genel: KGM/123.456
+                        r'(\d{2}\.\d{3}\.\d{4})',  # match anywhere
+                        r'(\d{3}-\d{3})',  # match anywhere
                     ]
 
                     poz_no = None
                     for pattern in poz_patterns:
-                        match = re.match(pattern, line)
+                        match = re.search(pattern, line.strip()) # Use search instead of match for robustness
                         if match:
                             poz_no = match.group(1)
                             break
 
                     if poz_no and poz_no not in poz_data:
-                        # Açıklama ve fiyat çıkar
-                        remaining = line[len(poz_no):].strip()
-
-                        # 1. Fiyat bulmaya çalış
-                        # Regex: Sayı + (TL/₺ veya satır sonu)
-                        price_candidates = re.findall(r'(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:TL|₺|$)', remaining)
+                        # Açıklama, birim ve fiyatı belirle
+                        # KGM formatında bunlar genellikle alt satırlarda olur.
+                        # ÇŞB formatında ise aynı satırda olur.
                         
-                        unit_price = '0,00'
-                        description = remaining
+                        description = ""
+                        unit = ""
+                        unit_price = "0,00"
+                        
+                        # Mevcut satırı kontrol et (ÇŞB Formatı)
+                        try:
+                            start_idx = line.find(poz_no)
+                            if start_idx != -1:
+                                same_line_remaining = line[start_idx + len(poz_no):].strip()
+                            else:
+                                same_line_remaining = line.replace(poz_no, "").strip()
+                        except:
+                            same_line_remaining = line.replace(poz_no, "").strip()
 
-                        if price_candidates:
-                            # Aday fiyatların sayısal kontrolünü yap
-                            valid_prices = []
-                            for p in price_candidates:
-                                try:
-                                    val = float(p.replace('.', '').replace(',', '.'))
-                                    if val > 0: # 0'dan büyük olmalı
-                                        valid_prices.append((val, p))
-                                except:
-                                    pass
+                        # Fiyat kontrolü (Aynı satırda)
+                        price_match = re.search(r'(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:TL|₺|$)', same_line_remaining)
+                        
+                        if price_match and len(same_line_remaining) > 10:
+                            # ÇŞB Formatı (Aynı satırda veri var)
+                            # Fiyatı al
+                            unit_price = price_match.group(1)
+                            # Açıklamayı al (fiyattan öncesi)
+                            description = same_line_remaining[:price_match.start()].strip()
                             
-                            if valid_prices:
-                                # Genellikle en sondaki fiyat birim fiyattır (bazı satırlarda miktar da sayı olabilir)
-                                # Ama miktar bazen fiyatın önüne gelir.
-                                # Basit yaklaşım: En sondaki geçerli sayıyı fiyat al
-                                _, final_price_str = valid_prices[-1]
-                                unit_price = final_price_str
+                            # Birimi bul
+                            unit_patterns = ['m³', 'm²', 'm2', 'm3', 'ton', 'kg', 'adet', 'lt', 'sa', 'gün', 'ay', 'ad', 'km']
+                            for u in unit_patterns:
+                                if re.search(r'\b' + re.escape(u) + r'\b', description, re.IGNORECASE):
+                                    unit = u
+                                    break
+                        else:
+                            # KGM Formatı (Alt satırlara bak)
+                            desc_lines = []
+                            found_price = False
+                            
+                            # Sonraki 10 satıra bak
+                            current_idx = rows.index(line)
+                            for k in range(1, 10):
+                                if current_idx + k >= len(rows):
+                                    break
                                 
-                                # Fiyatı açıklamadan temizle
-                                pidx = remaining.rfind(final_price_str)
-                                if pidx > 0:
-                                    description = remaining[:pidx].strip()
+                                next_line = rows[current_idx + k].strip()
+                                
+                                # Yeni bir poz no başladıysa dur
+                                is_new_poz = False
+                                for pattern in poz_patterns:
+                                    if re.match(pattern, next_line):
+                                        is_new_poz = True
+                                        break
+                                if is_new_poz:
+                                    break
 
-                        # 2. Birim bulmaya çalış
-                        unit = ''
-                        unit_patterns = ['m³', 'm²', 'm2', 'm3', 'ton', 'kg', 'adet', 'lt', 'sa', 'gün', 'ay']
-                        for u in unit_patterns:
-                             # Tam kelime eşleşmesi için regex
-                            if re.search(r'\b' + re.escape(u) + r'\b', description, re.IGNORECASE):
-                                unit = u
-                                break
+                                # Fiyat ve Birim Satırı mı? (Örn: "ad 543,24")
+                                price_candidates = re.findall(r'(\d{1,3}(?:\.\d{3})*(?:,\d{2}))', next_line)
+                                if price_candidates:
+                                    # Sayısal doğrulama
+                                    try:
+                                        p_val = float(price_candidates[-1].replace('.', '').replace(',', '.'))
+                                        if p_val > 0 and (len(next_line.strip()) < 20 or next_line.strip().endswith(price_candidates[-1])):
+                                            # Evet bu fiyat satırı
+                                            unit_price = price_candidates[-1]
+                                            found_price = True
+                                            
+                                            # Bu satırda birim var mı?
+                                            remaining_in_price_line = next_line.replace(unit_price, "").strip()
+                                            if remaining_in_price_line:
+                                                unit = remaining_in_price_line
+                                            break
+                                    except:
+                                        pass
+                                
+                                # Sadece Birim Satırı mı? (Örn: "ad")
+                                if len(next_line) < 10 and not found_price:
+                                    known_units = ['m³', 'm²', 'm2', 'm3', 'ton', 'kg', 'adet', 'lt', 'sa', 'gün', 'ay', 'ad', 'km']
+                                    if next_line in known_units:
+                                        unit = next_line
+                                        continue # Sonraki satır fiyat olabilir
 
-                        # 3. Kurum Tahmini
+                                # Açıklama parçası
+                                desc_lines.append(next_line)
+
+                            description = " ".join(desc_lines) if desc_lines else same_line_remaining
+
+                        # Kurum Tahmini
                         institution = 'ÇŞB'
                         if poz_no.startswith('10.') or poz_no.startswith('15.') or poz_no.startswith('25.'):
                              institution = 'ÇŞB'
                         elif poz_no.startswith('MSB'):
                              institution = 'MSB'
-                        elif poz_no.startswith('KGM'):
+                        elif poz_no.startswith('KGM') or '-' in poz_no:
                              institution = 'KGM'
                         elif poz_no.startswith('İLLER'):
                              institution = 'İLLER'
 
                         poz_info = {
                             'poz_no': poz_no,
-                            'description': description[:200] if description else f"Poz: {poz_no}",
+                            'description': description[:300] if description else f"Poz: {poz_no}",
                             'unit': unit,
                             'quantity': '',
                             'institution': institution,

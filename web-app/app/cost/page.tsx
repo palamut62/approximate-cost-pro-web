@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, Suspense } from 'react';
-import { Plus, Trash2, Save, FileDown, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Save, FileDown, Loader2, Search } from 'lucide-react';
 import { useCart } from '@/context/CartContext';
 import { useSearchParams } from 'next/navigation';
 import api from '@/lib/api';
 import * as XLSX from 'xlsx';
+import PozSelectorModal from '@/components/PozSelectorModal';
 
 type CostItem = {
     id: string; // Temporary ID for frontend
@@ -25,6 +26,7 @@ function CostEstimatorContent() {
     const [projectName, setProjectName] = useState("Yeni Proje");
     const [loading, setLoading] = useState(false);
     const [saveLoading, setSaveLoading] = useState(false);
+    const [isPozModalOpen, setPozModalOpen] = useState(false);
 
     // Load existing project if ID is provided
     useEffect(() => {
@@ -125,7 +127,9 @@ function CostEstimatorContent() {
             description: poz.description || "",
             unit: poz.unit || "adet",
             quantity: 1,
-            unit_price: parseFloat(poz.unit_price?.replace('.', '').replace(',', '.') || '0'),
+            unit_price: typeof poz.unit_price === 'number'
+                ? poz.unit_price
+                : parseFloat(String(poz.unit_price || '0').replace(/\./g, '').replace(',', '.')),
             total_price: 0
         };
         newItem.total_price = newItem.quantity * newItem.unit_price;
@@ -220,12 +224,21 @@ function CostEstimatorContent() {
                                             <Plus className="w-6 h-6 text-slate-300" />
                                         </div>
                                         <p>Henüz poz eklenmedi.</p>
-                                        <button
-                                            onClick={() => handleAddItem({})}
-                                            className="mt-2 text-blue-600 hover:underline font-medium"
-                                        >
-                                            Manuel Poz Ekle
-                                        </button>
+                                        <div className="flex gap-3 mt-4">
+                                            <button
+                                                onClick={() => setPozModalOpen(true)}
+                                                className="px-4 py-2 bg-blue-50 text-blue-600 rounded-lg font-medium hover:bg-blue-100 transition-colors flex items-center"
+                                            >
+                                                <Search className="w-4 h-4 mr-2" />
+                                                Kayıtlı Pozlardan Ekle
+                                            </button>
+                                            <button
+                                                onClick={() => handleAddItem({})}
+                                                className="px-4 py-2 text-slate-600 hover:text-slate-900 font-medium hover:underline"
+                                            >
+                                                Manuel Poz Ekle
+                                            </button>
+                                        </div>
                                     </div>
                                 </td>
                             </tr>
@@ -294,13 +307,28 @@ function CostEstimatorContent() {
                 </table>
             </div>
 
-            <button
-                onClick={() => handleAddItem({})}
-                className="w-full py-3 border-2 border-dashed border-slate-200 rounded-xl text-slate-500 hover:border-blue-400 hover:text-blue-500 transition-all flex items-center justify-center font-medium"
-            >
-                <Plus className="w-5 h-5 mr-1" />
-                Poz Ekle
-            </button>
+            <div className="grid grid-cols-2 gap-4">
+                <button
+                    onClick={() => setPozModalOpen(true)}
+                    className="w-full py-3 border-2 border-dashed border-blue-200 bg-blue-50/50 rounded-xl text-blue-600 hover:bg-blue-50 hover:border-blue-300 transition-all flex items-center justify-center font-medium"
+                >
+                    <Search className="w-5 h-5 mr-2" />
+                    Kayıtlı Pozlardan Ekle
+                </button>
+                <button
+                    onClick={() => handleAddItem({})}
+                    className="w-full py-3 border-2 border-dashed border-slate-200 rounded-xl text-slate-500 hover:border-slate-300 hover:text-slate-700 transition-all flex items-center justify-center font-medium"
+                >
+                    <Plus className="w-5 h-5 mr-1" />
+                    Manuel Poz Ekle
+                </button>
+            </div>
+
+            <PozSelectorModal
+                isOpen={isPozModalOpen}
+                onClose={() => setPozModalOpen(false)}
+                onSelect={(poz) => handleAddItem(poz)}
+            />
         </div>
     );
 }
