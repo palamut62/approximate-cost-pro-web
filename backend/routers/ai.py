@@ -19,6 +19,22 @@ class AnalysisRequest(BaseModel):
     context_data: str = ""
 
 
+class RefineRequest(BaseModel):
+    text: str
+
+
+@router.post("/refine-feedback")
+async def refine_feedback(request: RefineRequest):
+    """Kullanıcı geri bildirim açıklamasını iyileştir"""
+    service = AIAnalysisService()
+    try:
+        refined_text = service.refine_feedback_description(request.text)
+        return {"refined_text": refined_text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 # ============================================
 # POZ DATA ERİŞİM FONKSİYONLARI
 # ============================================
@@ -285,6 +301,12 @@ def find_price_by_similar_code(code: str, poz_data: Dict) -> Optional[float]:
     return None
 
 
+def normalize_for_search(text: str) -> str:
+    """Arama için metni normalize et (boşlukları sil, küçük harf yap)"""
+    if not text:
+        return ""
+    return text.lower().replace(" ", "").replace("\t", "")
+
 def find_price_by_description(name: str, unit: str, poz_data: Dict) -> Optional[float]:
     """Açıklama benzerliğine göre fiyat bul"""
     if not name:
@@ -294,12 +316,21 @@ def find_price_by_description(name: str, unit: str, poz_data: Dict) -> Optional[
     best_score = 0.0
 
     keywords = extract_keywords(name)
+    name_norm = normalize_for_search(name)
 
     for poz_no, poz_info in poz_data.items():
         poz_desc = poz_info.get('description', '')
         poz_unit = poz_info.get('unit', '')
 
-        # Benzerlik hesapla
+        # 1. Normalize edilmiş tam eşleşme (boşluksuz)
+        # Örn: "C 25/30" vs "C25/30"
+        desc_norm = normalize_for_search(poz_desc)
+        if name_norm in desc_norm or desc_norm in name_norm:
+            # Birim de tutuyorsa bu çok güçlü bir eşleşmedir
+            if unit.lower() == poz_unit.lower():
+                return parse_price(poz_info.get('unit_price', '0'))
+
+        # 2. Benzerlik hesapla
         similarity = calculate_similarity(name, poz_desc)
 
         # Anahtar kelime bonusu
@@ -336,19 +367,51 @@ def match_prices_from_poz_data(result: Dict) -> Dict:
         unit = comp.get("unit", "")
         current_price = float(comp.get("unit_price", 0))
 
-        # Eğer AI zaten makul bir fiyat verdiyse ve fiyat > 0 ise, koruyabiliriz
-        # Ama PDF'den daha doğru fiyat bulmaya çalışalım
-
         matched_price = None
         match_method = None
+        
+        # Strateji 0: Var olan kodu DOĞRULA
+        # Eğer kod varsa ama açıklaması tamamen alakasızsa, bu kodu reddet!
+        is_code_valid = False
+        if code in poz_data:
+            db_desc = poz_data[code].get('description', '')
+            # Basit benzerlik kontrolü
+            sim = calculate_similarity(name, db_desc)
+            
+            # Özel Durum: Beton sınıfları (C25/30 vb) için daha esnek ol
+            if "beton" in name.lower() and "beton" in db_desc.lower():
+                # Beton sınıfı kontrolü
+                name_norm = normalize_for_search(name)
+                db_norm = normalize_for_search(db_desc)
+                if "c20" in name_norm and "c20" in db_norm: sim = 1.0
+                elif "c25" in name_norm and "c25" in db_norm: sim = 1.0
+                elif "c30" in name_norm and "c30" in db_norm: sim = 1.0
+            
+            # Keyif Kaçıran Kelime Kontrolü (Keyword Mismatch)
+            # Eğer DB açıklamasında kritik kelimeler var ama aranan isimde yoksa ceza ver
+            critical_keywords = ['demir', 'kalıp', 'beton', 'iskele', 'duvar', 'alçı', 'boya', 'seramik', 'tesisat']
+            name_lower = name.lower()
+            db_desc_lower = db_desc.lower()
+            
+            for k in critical_keywords:
+                if k in db_desc_lower and k not in name_lower:
+                    # Kritik kelime uyumsuzluğu (örn: Demirci kodu ama Kalıpçı aranıyor)
+                    sim -= 0.3 # Ciddi ceza
+            
+            if sim > 0.45: # Eşik değer artırıldı (0.3 -> 0.45)
+                is_code_valid = True
+            else:
+                print(f"[AI VALIDATION] Kod reddedildi: {code} ({name}) != DB: {db_desc} (Sim: {sim:.2f})")
+                code = "" # Kodu sil ki aşağıda açıklama ile arasın
 
-        # Strateji 1: Doğrudan kod eşleşmesi
-        matched_price = find_price_by_code(code, poz_data)
-        if matched_price and matched_price > 0:
-            match_method = "exact_code"
+        # Strateji 1: Doğrudan kod eşleşmesi (Validasyondan geçtiyse)
+        if is_code_valid:
+            matched_price = parse_price(poz_data[code].get('unit_price', '0'))
+            if matched_price > 0:
+                match_method = "exact_code_validated"
 
         # Strateji 2: Benzer kod eşleşmesi
-        if not matched_price or matched_price == 0:
+        if (not matched_price or matched_price == 0) and code:
             matched_price = find_price_by_similar_code(code, poz_data)
             if matched_price and matched_price > 0:
                 match_method = "similar_code"
@@ -362,7 +425,7 @@ def match_prices_from_poz_data(result: Dict) -> Dict:
         # Fiyatı güncelle
         if matched_price and matched_price > 0:
             comp["unit_price"] = matched_price
-            comp["price_source"] = match_method  # Debug için
+            comp["price_source"] = match_method
         elif current_price > 0:
             comp["price_source"] = "ai_generated"
         else:
@@ -514,12 +577,18 @@ async def analyze_poz(request: AnalysisRequest):
         # 6. PDF verilerinden birim fiyatları eşleştir
         result = match_prices_from_poz_data(result)
 
-        # 6. Özet bilgi ekle
+        # 7. AI'dan önerilen birimi kullan (giriş birimi yerine)
+        suggested_unit = result.get("suggested_unit", request.unit)
+        result["unit"] = suggested_unit
+
+        # 8. Özet bilgi ekle
         result["metadata"] = {
             "poz_data_count": len(get_poz_data()),
             "context_provided": bool(full_context),
             "feedback_used": bool(feedback_context),
-            "price_sources": summarize_price_sources(result)
+            "price_sources": summarize_price_sources(result),
+            "input_unit": request.unit,
+            "suggested_unit": suggested_unit
         }
 
         return result

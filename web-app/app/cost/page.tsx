@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from 'react';
 import { Plus, Trash2, Save, FileDown, Loader2, Search } from 'lucide-react';
 import { useCart } from '@/context/CartContext';
+import { useNotification } from '@/context/NotificationContext';
 import { useSearchParams } from 'next/navigation';
 import api from '@/lib/api';
 import * as XLSX from 'xlsx';
@@ -22,6 +23,7 @@ function CostEstimatorContent() {
     const searchParams = useSearchParams();
     const projectId = searchParams.get('id');
     const { items: cartItems, clearCart } = useCart();
+    const { showNotification } = useNotification();
     const [items, setItems] = useState<CostItem[]>([]);
     const [projectName, setProjectName] = useState("Yeni Proje");
     const [loading, setLoading] = useState(false);
@@ -49,7 +51,7 @@ function CostEstimatorContent() {
                 })
                 .catch(err => {
                     console.error("Project load error:", err);
-                    alert("Proje yüklenirken hata oluştu.");
+                    showNotification("Proje yüklenirken hata oluştu.", "error");
                 })
                 .finally(() => setLoading(false));
         }
@@ -91,10 +93,10 @@ function CostEstimatorContent() {
                 await api.post('/projects', payload);
             }
 
-            alert("Proje başarıyla kaydedildi!");
+            showNotification("Proje başarıyla kaydedildi!", "success");
         } catch (e) {
             console.error(e);
-            alert("Kaydetme sırasında hata oluştu.");
+            showNotification("Kaydetme sırasında hata oluştu.", "error");
         } finally {
             setSaveLoading(false);
         }

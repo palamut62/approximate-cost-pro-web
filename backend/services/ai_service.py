@@ -16,6 +16,58 @@ class AIAnalysisService:
         self.model = model
         self.base_url = base_url
 
+    def refine_feedback_description(self, text: str) -> str:
+        """Kullanıcının girdiği düzeltme metnini profesyonel bir dile çevirir."""
+        prompt = f"""Bir inşaat mühendisi gibi davran. Aşağıdaki gayri resmi düzeltme açıklamasını, 
+gelecekteki analizlerde referans alınabilecek profesyonel, teknik ve net bir inşaat mühendisi 
+talimatına (düzeltme notuna) dönüştür.
+
+GİRİŞ: "{text}"
+
+TALİMAT:
+- Teknik terimler kullan (örn: imalat, metraj, rayiç, keşif).
+- Net ve emir kipi/bilgi verici tonda ol.
+- Sadece düzeltilmiş metni yaz, başka hiçbir şey ekleme.
+"""
+        
+        # OpenRouter or Gemini
+        messages = [
+            {"role": "system", "content": "Sen uzman bir inşaat mühendisisin."},
+            {"role": "user", "content": prompt}
+        ]
+
+        if self.openrouter_key:
+            try:
+                headers = {
+                    "Authorization": f"Bearer {self.openrouter_key}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": 0.3
+                }
+                response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=30)
+                response.raise_for_status()
+                return response.json()['choices'][0]['message']['content'].strip()
+            except Exception as e:
+                print(f"Refine Error (OpenRouter): {e}")
+
+        if self.gemini_key:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
+                data = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.3}
+                }
+                response = requests.post(url, json=data, timeout=30)
+                response.raise_for_status()
+                return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+            except Exception as e:
+                print(f"Refine Error (Gemini): {e}")
+
+        return text # Hata durumunda orijinali döndür
+
     def generate_analysis(self, description: str, unit: str, context_data: str = "") -> Dict[str, Any]:
         """Analiz oluşturma ana fonksiyonu"""
         prompt = self._build_professional_prompt(description, unit, context_data)
@@ -137,6 +189,7 @@ Aşağıdaki poz tanımı için detaylı birim fiyat analizi oluştur:
 SADECE aşağıdaki JSON formatında yanıt ver, başka hiçbir şey yazma:
 
 {{
+  "suggested_unit": "m2/m3/adet/ton/kg - Bu poz için EN UYGUN birim",
   "explanation": "Bu analiz [kısa açıklama]. Malzeme miktarları [norm/kaynak] esas alınarak, işçilik süreleri [norm] baz alınarak hesaplanmıştır. Nakliye 20 km mesafe için eklenmiştir.",
   "components": [
     {{

@@ -2,13 +2,15 @@
 
 import { useEffect, useState } from 'react';
 import api from '@/lib/api';
-import { FileText, Database, Activity, Clock, ArrowRight, Truck } from 'lucide-react';
+import { FileText, Database, Activity, Clock, ArrowRight, Truck, Cpu } from 'lucide-react';
 import Link from 'next/link';
+import { useLLMUsage } from '@/context/LLMUsageContext';
 
 export default function Home() {
   const [stats, setStats] = useState({ item_count: 0, file_count: 0 });
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const { usageData, loading: usageLoading } = useLLMUsage();
 
   useEffect(() => {
     async function fetchData() {
@@ -48,13 +50,7 @@ export default function Home() {
           icon={FileText}
           loading={loading}
         />
-        <StatsCard
-          title="Sistem Durumu"
-          value="Aktif"
-          icon={Activity}
-          loading={false}
-          valueClass="text-green-600"
-        />
+        <LLMUsageStatsCard />
       </div>
 
       <div className="space-y-4">
@@ -120,7 +116,7 @@ export default function Home() {
   );
 }
 
-function StatsCard({ title, value, icon: Icon, loading, valueClass }: any) {
+function StatsCard({ title, value, icon: Icon, loading, valueClass, subtitle }: any) {
   return (
     <div className="p-6 bg-white rounded-xl shadow-sm border border-slate-100 flex items-center space-x-4">
       <div className="p-3 bg-blue-50 text-blue-600 rounded-lg">
@@ -135,7 +131,51 @@ function StatsCard({ title, value, icon: Icon, loading, valueClass }: any) {
             {typeof value === 'number' ? value.toLocaleString('tr-TR') : value}
           </h3>
         )}
+        {subtitle && <p className="text-xs text-slate-500 mt-1">{subtitle}</p>}
       </div>
     </div>
   )
+}
+
+function LLMUsageStatsCard() {
+  const { usageData, loading: usageLoading } = useLLMUsage();
+
+  if (usageLoading) {
+    return (
+      <StatsCard
+        title="LLM Kalan Bakiye"
+        value="--"
+        icon={Cpu}
+        loading={true}
+      />
+    );
+  }
+
+  if (usageData.total_credits === null) {
+    return (
+      <StatsCard
+        title="LLM Kalan Bakiye"
+        value="--"
+        icon={Cpu}
+        loading={false}
+        subtitle="API anahtarı gerekli"
+        valueClass="text-slate-400"
+      />
+    );
+  }
+
+  // Show remaining balance
+  const valueClass = usageData.is_low_balance ? "text-red-600" : "text-green-600";
+  const remaining = usageData.remaining ?? 0;
+
+  return (
+    <StatsCard
+      title="LLM Kalan Bakiye"
+      value={`$${remaining.toFixed(2)}`}
+      icon={Cpu}
+      loading={false}
+      subtitle={`$${usageData.total_usage?.toFixed(2) ?? '--'} / $${usageData.total_credits?.toFixed(2) ?? '--'} kullanıldı`}
+      valueClass={valueClass}
+    />
+  );
 }

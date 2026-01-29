@@ -63,7 +63,6 @@ export default function SettingsPage() {
             {/* Tabs */}
             <div className="flex space-x-1 bg-slate-100 p-1 rounded-lg">
                 <TabButton id="constants" label="Sabitler (Nakliye/Malzeme)" activeById={activeTab} onClick={setActiveTab} />
-                <TabButton id="ai" label="Yapay Zeka" activeById={activeTab} onClick={setActiveTab} />
                 <TabButton id="signatories" label="İmza Sahipleri" activeById={activeTab} onClick={setActiveTab} />
             </div>
 
@@ -121,54 +120,25 @@ export default function SettingsPage() {
                                 <Input label="Demir" value={settings['yogunluk_demir'] || '7.85'} onChange={v => handleSave('yogunluk_demir', v)} type="number" step="0.01" />
                             </div>
                         </Section>
-                    </div>
-                )}
 
-                {activeTab === 'ai' && (
-                    <div className="space-y-8">
-                        <Section title="AI Sağlayıcı">
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-slate-700">Varsayılan Sağlayıcı</label>
-                                <select
-                                    value={settings['ai_provider'] || 'OpenRouter'}
-                                    onChange={(e) => handleSave('ai_provider', e.target.value)}
-                                    className="w-full p-2 border border-slate-300 rounded-lg"
-                                >
-                                    <option value="OpenRouter">OpenRouter</option>
-                                    <option value="Google Gemini">Google Gemini</option>
-                                </select>
+                        {/* LLM Usage Warning */}
+                        <Section title="LLM Kullanım Uyarısı">
+                            <div className="max-w-xs">
+                                <Input
+                                    label="Uyarı Eşiği (USD)"
+                                    value={settings['llm_warning_threshold'] || '1.00'}
+                                    onChange={v => handleSave('llm_warning_threshold', v)}
+                                    type="number"
+                                    step="0.01"
+                                />
+                                <p className="text-xs text-slate-500 mt-1">
+                                    Bu tutarın altına düştüğünde tüm sayfalarda uyarı gösterilir.
+                                </p>
                             </div>
                         </Section>
-
-                        <Section title="OpenRouter Ayarları">
-                            <Input
-                                label="API Key"
-                                value={settings['openrouter_api_key'] || ''}
-                                onChange={v => handleSave('openrouter_api_key', v)}
-                                type="password"
-                            />
-                            <Input
-                                label="Model"
-                                value={settings['openrouter_model'] || 'google/gemini-pro'}
-                                onChange={v => handleSave('openrouter_model', v)}
-                            />
-                        </Section>
-
-                        <Section title="Google Gemini Ayarları">
-                            <Input
-                                label="API Key"
-                                value={settings['gemini_api_key'] || ''}
-                                onChange={v => handleSave('gemini_api_key', v)}
-                                type="password"
-                            />
-                            <Input
-                                label="Model"
-                                value={settings['gemini_model'] || 'gemini-pro'}
-                                onChange={v => handleSave('gemini_model', v)}
-                            />
-                        </Section>
                     </div>
                 )}
+
 
                 {activeTab === 'signatories' && (
                     <div className="space-y-8">

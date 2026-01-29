@@ -6,6 +6,7 @@ import api from '@/lib/api';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCart } from '@/context/CartContext';
+import { useNotification } from '@/context/NotificationContext';
 
 type Analysis = {
     id: number;
@@ -24,6 +25,7 @@ export default function SavedAnalysesPage() {
     const [selectedAnalysis, setSelectedAnalysis] = useState<any>(null);
     const [detailLoading, setDetailLoading] = useState(false);
     const { addItem } = useCart();
+    const { showNotification, confirm } = useNotification();
     const router = useRouter();
 
     useEffect(() => {
@@ -40,7 +42,7 @@ export default function SavedAnalysesPage() {
             institution: "Özel Analiz",
             source_file: "Kayıtlı Analiz"
         });
-        alert(`"${analysis.name}" maliyet hesabına eklendi!`);
+        showNotification(`"${analysis.name}" maliyet hesabına eklendi!`, "success");
     };
 
     const handleAddAndGo = (analysis: Analysis) => {
@@ -66,26 +68,30 @@ export default function SavedAnalysesPage() {
             setSelectedAnalysis(res.data);
         } catch (e) {
             console.error("Analiz detayı yüklenemedi:", e);
-            alert("Analiz detayı yüklenirken hata oluştu.");
+            showNotification("Analiz detayı yüklenirken hata oluştu.", "error");
         } finally {
             setDetailLoading(false);
         }
     };
 
-    const handleDelete = async (id: number) => {
-        if (!confirm("Bu analizi silmek istediğinize emin misiniz?")) return;
-
-        try {
-            await api.delete(`/analyses/${id}`);
-            setAnalyses(analyses.filter(a => a.id !== id));
-            if (selectedAnalysis?.id === id) {
-                setSelectedAnalysis(null);
+    const handleDelete = (id: number) => {
+        confirm({
+            title: "Analizi Sil",
+            message: "Bu analizi silmek istediğinize emin misiniz? Bu işlem geri alınamaz.",
+            onConfirm: async () => {
+                try {
+                    await api.delete(`/analyses/${id}`);
+                    setAnalyses(analyses.filter(a => a.id !== id));
+                    if (selectedAnalysis?.id === id) {
+                        setSelectedAnalysis(null);
+                    }
+                    showNotification("Analiz silindi.", "success");
+                } catch (e) {
+                    console.error("Analiz silinemedi:", e);
+                    showNotification("Analiz silinirken hata oluştu.", "error");
+                }
             }
-            alert("Analiz silindi.");
-        } catch (e) {
-            console.error("Analiz silinemedi:", e);
-            alert("Analiz silinirken hata oluştu.");
-        }
+        });
     };
 
     if (loading) {
@@ -130,8 +136,8 @@ export default function SavedAnalysesPage() {
                                 <div
                                     key={analysis.id}
                                     className={`bg-white rounded-xl shadow-sm border p-4 cursor-pointer transition-all ${selectedAnalysis?.id === analysis.id
-                                            ? 'border-purple-400 ring-2 ring-purple-100'
-                                            : 'border-slate-200 hover:border-slate-300'
+                                        ? 'border-purple-400 ring-2 ring-purple-100'
+                                        : 'border-slate-200 hover:border-slate-300'
                                         }`}
                                     onClick={() => handleViewDetail(analysis.id)}
                                 >
@@ -255,9 +261,9 @@ export default function SavedAnalysesPage() {
                                             <tr key={idx} className="hover:bg-slate-50">
                                                 <td className="px-4 py-3">
                                                     <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${comp.type === 'Malzeme' ? 'bg-blue-100 text-blue-700' :
-                                                            comp.type === 'İşçilik' ? 'bg-orange-100 text-orange-700' :
-                                                                comp.type === 'Nakliye' ? 'bg-green-100 text-green-700' :
-                                                                    'bg-slate-100 text-slate-700'
+                                                        comp.type === 'İşçilik' ? 'bg-orange-100 text-orange-700' :
+                                                            comp.type === 'Nakliye' ? 'bg-green-100 text-green-700' :
+                                                                'bg-slate-100 text-slate-700'
                                                         }`}>
                                                         {comp.type}
                                                     </span>

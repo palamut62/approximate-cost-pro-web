@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Sparkles, Loader2, Plus, Save, FileDown, Trash2, Info, Calculator, GraduationCap, X } from 'lucide-react';
 import api from '@/lib/api';
 import { useCart } from '@/context/CartContext';
+import { useNotification } from '@/context/NotificationContext';
 import { cn } from '@/lib/utils';
 import * as XLSX from 'xlsx';
 
@@ -16,27 +17,33 @@ type AIComponent = {
     quantity: number;
     unit_price: number;
     total_price: number;
+    price_source?: string;
 }
 
 type AIResult = {
+    suggested_unit?: string;
+    unit?: string;
     explanation: string;
     components: AIComponent[];
 }
 
 export default function AnalysisPage() {
     const [description, setDescription] = useState("");
-    const [unit, setUnit] = useState("m2");
+    const [displayUnit, setDisplayUnit] = useState("m2");
     const [loading, setLoading] = useState(false);
     const [saveLoading, setSaveLoading] = useState(false);
     const [result, setResult] = useState<AIResult | null>(null);
     const [analysisName, setAnalysisName] = useState("");
     const { addItem } = useCart();
+    const { showNotification } = useNotification();
 
     // Feedback modal states
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
     const [feedbackLoading, setFeedbackLoading] = useState(false);
     const [correctionType, setCorrectionType] = useState("wrong_method");
     const [correctionDescription, setCorrectionDescription] = useState("");
+    const [refineLoading, setRefineLoading] = useState(false);
+    const [selectedCompForDetail, setSelectedCompForDetail] = useState<AIComponent | null>(null);
 
     const handleAnalyze = async () => {
         if (!description) return;
@@ -45,7 +52,7 @@ export default function AnalysisPage() {
         try {
             const res = await api.post('/ai/analyze', {
                 description,
-                unit
+                unit: "m2"  // AI bu bilgiyi referans alacak, kendi önerdiği birimi döndürecek
             });
             // Her component'a benzersiz ID ekle
             const components = res.data.components.map((comp: any, idx: number) => ({
@@ -53,10 +60,11 @@ export default function AnalysisPage() {
                 id: `comp-${Date.now()}-${idx}`
             }));
             setResult({ ...res.data, components });
+            setDisplayUnit(res.data.unit || res.data.suggested_unit || "m2");
             setAnalysisName(description);
         } catch (e: any) {
             console.error(e);
-            alert("Analiz sırasında bir hata oluştu: " + (e.response?.data?.detail || e.message));
+            showNotification("Analiz sırasında bir hata oluştu: " + (e.response?.data?.detail || e.message), "error");
         } finally {
             setLoading(false);
         }
@@ -118,10 +126,10 @@ export default function AnalysisPage() {
             };
 
             await api.post('/projects', payload);
-            alert("Analiz proje olarak kaydedildi!");
+            showNotification("Analiz proje olarak kaydedildi!", "success");
         } catch (e) {
             console.error(e);
-            alert("Kaydetme sırasında hata oluştu.");
+            showNotification("Kaydetme sırasında hata oluştu.", "error");
         } finally {
             setSaveLoading(false);
         }
@@ -134,7 +142,7 @@ export default function AnalysisPage() {
             const payload = {
                 name: analysisName || description,
                 description: description,
-                unit: unit,
+                unit: displayUnit,
                 explanation: result.explanation,
                 components: result.components.map(comp => ({
                     type: comp.type,
@@ -147,10 +155,10 @@ export default function AnalysisPage() {
             };
 
             await api.post('/analyses', payload);
-            alert("Analiz kaydedildi!");
+            showNotification("Analiz kaydedildi!", "success");
         } catch (e) {
             console.error(e);
-            alert("Kaydetme sırasında hata oluştu.");
+            showNotification("Kaydetme sırasında hata oluştu.", "error");
         } finally {
             setSaveLoading(false);
         }
@@ -175,6 +183,22 @@ export default function AnalysisPage() {
         XLSX.writeFile(wb, `${analysisName || 'Analiz'}_Detay.xlsx`);
     };
 
+    const handleRefineDescription = async () => {
+        if (!correctionDescription.trim()) return;
+        setRefineLoading(true);
+        try {
+            const res = await api.post('/ai/refine-feedback', { text: correctionDescription });
+            if (res.data.refined_text) {
+                setCorrectionDescription(res.data.refined_text);
+            }
+        } catch (e) {
+            console.error(e);
+            showNotification("İyileştirme sırasında hata oluştu.", "error");
+        } finally {
+            setRefineLoading(false);
+        }
+    };
+
     const handleAddAllToProject = () => {
         if (!result) return;
         result.components.forEach(comp => {
@@ -187,12 +211,12 @@ export default function AnalysisPage() {
                 source_file: "AI Analysis"
             });
         });
-        alert("Tüm kalemler projeye eklendi!");
+        showNotification("Tüm kalemler projeye eklendi!", "success");
     };
 
     const handleSubmitFeedback = async () => {
         if (!result || !correctionDescription.trim()) {
-            alert("Lütfen düzeltme açıklamasını girin.");
+            showNotification("Lütfen düzeltme açıklamasını girin.", "warning");
             return;
         }
 
@@ -200,7 +224,7 @@ export default function AnalysisPage() {
         try {
             await api.post('/feedback', {
                 original_prompt: description,
-                original_unit: unit,
+                original_unit: displayUnit,
                 correction_type: correctionType,
                 correction_description: correctionDescription,
                 correct_components: result.components.map(comp => ({
@@ -214,12 +238,12 @@ export default function AnalysisPage() {
                 keywords: description.toLowerCase().split(' ').filter(w => w.length > 2)
             });
 
-            alert("Düzeltmeniz kaydedildi! AI bundan sonraki benzer sorgularda bu bilgiyi kullanacak.");
+            showNotification("Düzeltmeniz kaydedildi! AI bundan sonraki benzer sorgularda bu bilgiyi kullanacak.", "success");
             setShowFeedbackModal(false);
             setCorrectionDescription("");
         } catch (e: any) {
             console.error(e);
-            alert("Kaydetme sırasında hata oluştu: " + (e.response?.data?.detail || e.message));
+            showNotification("Kaydetme sırasında hata oluştu: " + (e.response?.data?.detail || e.message), "error");
         } finally {
             setFeedbackLoading(false);
         }
@@ -253,7 +277,7 @@ export default function AnalysisPage() {
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                     <div className="md:col-span-2 space-y-2">
                         <label className="text-sm font-medium text-slate-700">Poz Tanımı</label>
                         <input
@@ -261,16 +285,6 @@ export default function AnalysisPage() {
                             placeholder="Örn: 20 cm Gazbeton Duvar Örülmesi"
                             value={description}
                             onChange={(e) => setDescription(e.target.value)}
-                            className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
-                        />
-                    </div>
-                    <div className="space-y-2">
-                        <label className="text-sm font-medium text-slate-700">Birim</label>
-                        <input
-                            type="text"
-                            placeholder="m2"
-                            value={unit}
-                            onChange={(e) => setUnit(e.target.value)}
                             className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent outline-none"
                         />
                     </div>
@@ -377,7 +391,12 @@ export default function AnalysisPage() {
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
                                     {result.components.map((comp) => (
-                                        <tr key={comp.id} className="hover:bg-slate-50 transition-colors">
+                                        <tr
+                                            key={comp.id}
+                                            onDoubleClick={() => setSelectedCompForDetail(comp)}
+                                            className="hover:bg-slate-50 transition-colors cursor-pointer select-none"
+                                            title="Detaylar için çift tıklayın"
+                                        >
                                             <td className="px-4 py-3">
                                                 <select
                                                     value={comp.type}
@@ -499,7 +518,7 @@ export default function AnalysisPage() {
                                 </span>
                             </div>
                             <div className="border-t-2 border-slate-300 pt-3 flex justify-between items-center py-2">
-                                <span className="text-lg font-bold text-slate-800">1 {unit} Birim Fiyatı</span>
+                                <span className="text-lg font-bold text-slate-800">1 {displayUnit} Birim Fiyatı</span>
                                 <span className="text-xl font-bold text-purple-600">
                                     {grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL
                                 </span>
@@ -553,13 +572,23 @@ export default function AnalysisPage() {
 
                             <div className="space-y-2">
                                 <label className="text-sm font-medium text-slate-700">Düzeltme Açıklaması</label>
-                                <textarea
-                                    value={correctionDescription}
-                                    onChange={(e) => setCorrectionDescription(e.target.value)}
-                                    placeholder="Örn: Beton santrali ile taş duvar demek, beton döküm işçiliği ve hazır beton malzemesi demektir, taş duvar malzemeleri değil..."
-                                    rows={4}
-                                    className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none resize-none"
-                                />
+                                <div className="relative group">
+                                    <textarea
+                                        value={correctionDescription}
+                                        onChange={(e) => setCorrectionDescription(e.target.value)}
+                                        placeholder="Örn: Beton santrali ile taş duvar demek, beton döküm işçiliği ve hazır beton malzemesi demektir, taş duvar malzemeleri değil..."
+                                        rows={4}
+                                        className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent outline-none resize-none pr-12"
+                                    />
+                                    <button
+                                        onClick={handleRefineDescription}
+                                        disabled={refineLoading || !correctionDescription.trim()}
+                                        className="absolute right-3 top-3 p-2 bg-amber-50 text-amber-600 rounded-lg hover:bg-amber-100 transition-all border border-amber-200 shadow-sm disabled:opacity-50"
+                                        title="AI ile profesyonelce düzenle"
+                                    >
+                                        {refineLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                                    </button>
+                                </div>
                                 <p className="text-xs text-slate-500">
                                     AI'nın hatasını açıkça belirtin. Bu açıklama gelecekteki sorgularda referans olarak kullanılacak.
                                 </p>
@@ -574,9 +603,9 @@ export default function AnalysisPage() {
                                                 <span className={cn(
                                                     "text-[10px] font-bold uppercase px-1.5 py-0.5 rounded mr-2",
                                                     comp.type === 'Malzeme' ? 'bg-blue-100 text-blue-700' :
-                                                    comp.type === 'İşçilik' ? 'bg-orange-100 text-orange-700' :
-                                                    comp.type === 'Nakliye' ? 'bg-green-100 text-green-700' :
-                                                    'bg-slate-100 text-slate-700'
+                                                        comp.type === 'İşçilik' ? 'bg-orange-100 text-orange-700' :
+                                                            comp.type === 'Nakliye' ? 'bg-green-100 text-green-700' :
+                                                                'bg-slate-100 text-slate-700'
                                                 )}>
                                                     {comp.type}
                                                 </span>
@@ -593,7 +622,7 @@ export default function AnalysisPage() {
                             <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                                 <h3 className="font-medium text-blue-800 mb-1">Orijinal Sorgu</h3>
                                 <p className="text-blue-700 font-mono text-sm">{description}</p>
-                                <p className="text-blue-600 text-xs mt-1">Birim: {unit}</p>
+                                <p className="text-blue-600 text-xs mt-1">Birim: {displayUnit}</p>
                             </div>
                         </div>
 
@@ -613,6 +642,95 @@ export default function AnalysisPage() {
                             >
                                 {feedbackLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <GraduationCap className="w-4 h-4 mr-2" />}
                                 AI'ya Öğret
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* Poz Detay Modal */}
+            {selectedCompForDetail && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setSelectedCompForDetail(null)}>
+                    <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                            <div className="flex items-center">
+                                <Info className="w-5 h-5 text-blue-600 mr-2" />
+                                <h2 className="text-lg font-bold text-slate-800">Poz Detayı</h2>
+                            </div>
+                            <button onClick={() => setSelectedCompForDetail(null)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                                <X className="w-6 h-6" />
+                            </button>
+                        </div>
+
+                        <div className="p-6 space-y-6">
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Poz Kodu</label>
+                                    <div className="font-mono text-sm text-slate-700 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                                        {selectedCompForDetail.code || 'Kodsuz'}
+                                    </div>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Tür</label>
+                                    <div className="text-sm">
+                                        <span className={cn(
+                                            "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
+                                            selectedCompForDetail.type === 'Malzeme' ? 'bg-blue-100 text-blue-700' :
+                                                selectedCompForDetail.type === 'İşçilik' ? 'bg-orange-100 text-orange-700' :
+                                                    selectedCompForDetail.type === 'Nakliye' ? 'bg-green-100 text-green-700' :
+                                                        'bg-slate-100 text-slate-700'
+                                        )}>
+                                            {selectedCompForDetail.type}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Açıklama</label>
+                                <div className="text-slate-800 font-medium leading-relaxed">
+                                    {selectedCompForDetail.name}
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-3 gap-4 py-4 border-y border-slate-50">
+                                <div className="text-center">
+                                    <div className="text-xs text-slate-400 mb-1">Miktar</div>
+                                    <div className="font-bold text-slate-700">{selectedCompForDetail.quantity} {selectedCompForDetail.unit}</div>
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-xs text-slate-400 mb-1">Birim Fiyat</div>
+                                    <div className="font-bold text-slate-700">{selectedCompForDetail.unit_price.toLocaleString('tr-TR')} TL</div>
+                                </div>
+                                <div className="text-center">
+                                    <div className="text-xs text-slate-400 mb-1">Tutar</div>
+                                    <div className="font-bold text-purple-600">{selectedCompForDetail.total_price.toLocaleString('tr-TR')} TL</div>
+                                </div>
+                            </div>
+
+                            {/* Fiyat Kaynağı Bilgisi */}
+                            {selectedCompForDetail.price_source && (
+                                <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
+                                    <div className="flex items-center text-blue-800 text-xs font-semibold mb-2">
+                                        <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                                        FİYAT KAYNAĞI
+                                    </div>
+                                    <p className="text-blue-700 text-xs leading-normal">
+                                        {selectedCompForDetail.price_source === 'exact_code_validated' && "Fiyat, veritabanındaki tam kod eşleşmesi ve açıklama doğrulaması ile getirilmiştir."}
+                                        {selectedCompForDetail.price_source === 'description' && "Fiyat, benzer açıklama metinleri üzerinden AI destekli eşleştirme ile getirilmiştir."}
+                                        {selectedCompForDetail.price_source === 'similar_code' && "Fiyat, benzer kod hiyerarşisi üzerinden tahmin edilerek getirilmiştir."}
+                                        {selectedCompForDetail.price_source === 'ai_generated' && "Bu kalem için veritabanında kesin eşleşme bulunamadı, fiyat AI tarafından piyasa ortalamasına göre tahmin edildi."}
+                                        {selectedCompForDetail.price_source === 'not_found' && "Veritabanında uygun fiyat bulunamadı."}
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-end">
+                            <button
+                                onClick={() => setSelectedCompForDetail(null)}
+                                className="px-6 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-colors font-medium text-sm shadow-sm"
+                            >
+                                Kapat
                             </button>
                         </div>
                     </div>

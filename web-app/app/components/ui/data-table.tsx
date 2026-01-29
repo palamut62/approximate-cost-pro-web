@@ -15,12 +15,14 @@ interface DataTableProps<TData, TValue> {
     columns: ColumnDef<TData, TValue>[]
     data: TData[]
     loading?: boolean
+    onRowDoubleClick?: (data: TData) => void
 }
 
 export function DataTable<TData, TValue>({
     columns,
     data,
     loading,
+    onRowDoubleClick,
 }: DataTableProps<TData, TValue>) {
     const [pagination, setPagination] = useState({
         pageIndex: 0,
@@ -75,7 +77,11 @@ export function DataTable<TData, TValue>({
                                 <tr
                                     key={row.id}
                                     data-state={row.getIsSelected() && "selected"}
-                                    className="hover:bg-slate-50 transition-colors"
+                                    onDoubleClick={() => onRowDoubleClick?.(row.original)}
+                                    className={cn(
+                                        "hover:bg-slate-50 transition-colors",
+                                        onRowDoubleClick && "cursor-pointer select-none"
+                                    )}
                                 >
                                     {row.getVisibleCells().map((cell) => (
                                         <td key={cell.id} className="px-4 py-2 align-middle">

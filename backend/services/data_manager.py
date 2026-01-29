@@ -768,9 +768,22 @@ class CSVLoader:
                             # Birimi bul
                             unit_patterns = ['m³', 'm²', 'm2', 'm3', 'ton', 'kg', 'adet', 'lt', 'sa', 'gün', 'ay', 'ad', 'km']
                             for u in unit_patterns:
-                                if re.search(r'\b' + re.escape(u) + r'\b', description, re.IGNORECASE):
+                                # Safe units for partial match (symbols)
+                                safe_to_partial = u in ['m³', 'm²', 'm2', 'm3']
+                                
+                                pattern = r'\b' + re.escape(u) + r'\b'
+                                if safe_to_partial:
+                                    pattern = re.escape(u) # Relaxed for symbols
+                                    
+                                if re.search(pattern, description, re.IGNORECASE):
                                     unit = u
                                     break
+                                    
+                            # Eğer stringler yapışık ise (örn: ...m³Depoda...)
+                            # Açıklamayı temizlerken birimi de ayırabiliriz
+                            if unit and unit in description:
+                                # unit'in bitişinden sonra boşluk yoksa ekle (Görüntüleme için)
+                                pass # Şimdilik elleme, sadece metadata düzelsin yeter
                         else:
                             # KGM Formatı (Alt satırlara bak)
                             desc_lines = []
@@ -812,10 +825,10 @@ class CSVLoader:
                                     except:
                                         pass
                                 
-                                # Sadece Birim Satırı mı? (Örn: "ad")
+                                # Sadece Birim Satırı mı? (Örn: "ad", "Sa")
                                 if len(next_line) < 10 and not found_price:
-                                    known_units = ['m³', 'm²', 'm2', 'm3', 'ton', 'kg', 'adet', 'lt', 'sa', 'gün', 'ay', 'ad', 'km']
-                                    if next_line in known_units:
+                                    known_units = ['m³', 'm²', 'm2', 'm3', 'ton', 'kg', 'adet', 'lt', 'sa', 'gün', 'ay', 'ad', 'km', 'saat']
+                                    if next_line.lower() in known_units:
                                         unit = next_line
                                         continue # Sonraki satır fiyat olabilir
 
