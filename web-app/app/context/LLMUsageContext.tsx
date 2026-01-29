@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 import api from '@/lib/api';
 
 interface LLMUsageData {
+  provider: string;
   usage: number | null;
   usage_monthly: number | null;
   usage_daily: number | null;
@@ -26,6 +27,7 @@ const LLMUsageContext = createContext<LLMUsageContextType | undefined>(undefined
 
 export function LLMUsageProvider({ children }: { children: ReactNode }) {
   const [usageData, setUsageData] = useState<LLMUsageData>({
+    provider: "OpenRouter",
     usage: null,
     usage_monthly: null,
     usage_daily: null,

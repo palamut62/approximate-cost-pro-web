@@ -170,7 +170,7 @@ function LLMUsageStatsCard() {
 
   return (
     <StatsCard
-      title="LLM Kalan Bakiye"
+      title={`LLM Kalan Bakiye (${usageData.provider})`}
       value={`$${remaining.toFixed(2)}`}
       icon={Cpu}
       loading={false}

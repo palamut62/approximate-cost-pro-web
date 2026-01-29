@@ -16,6 +16,7 @@ load_dotenv(root_dir / ".env")
 
 
 class LLMUsageResponse(BaseModel):
+    provider: str = "OpenRouter"
     usage: Optional[float] = None
     usage_monthly: Optional[float] = None
     usage_daily: Optional[float] = None
@@ -46,6 +47,7 @@ async def get_llm_usage():
 
     if not api_key:
         return LLMUsageResponse(
+            provider="OpenRouter",
             usage=None,
             usage_monthly=None,
             usage_daily=None,
@@ -92,6 +94,7 @@ async def get_llm_usage():
                 is_low_balance = remaining <= warning_threshold
 
             return LLMUsageResponse(
+                provider="OpenRouter",
                 usage=total_usage,
                 usage_monthly=usage_monthly,
                 usage_daily=usage_daily,
@@ -106,6 +109,7 @@ async def get_llm_usage():
     except httpx.HTTPError as e:
         print(f"OpenRouter API error: {e}")
         return LLMUsageResponse(
+            provider="OpenRouter",
             usage=None,
             usage_monthly=None,
             usage_daily=None,
@@ -119,6 +123,7 @@ async def get_llm_usage():
     except Exception as e:
         print(f"Unexpected error fetching LLM usage: {e}")
         return LLMUsageResponse(
+            provider="OpenRouter",
             usage=None,
             usage_monthly=None,
             usage_daily=None,

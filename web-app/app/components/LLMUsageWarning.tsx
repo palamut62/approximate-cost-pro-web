@@ -12,7 +12,7 @@ export default function LLMUsageWarning() {
   return (
     <div className="bg-red-500 text-white px-4 py-2 text-center flex items-center justify-center space-x-2">
       <span>
-        ⚠️ LLM kredi bakiyeniz tükenmek üzere! Kalan: ${usageData.remaining.toFixed(2)}
+        ⚠️ {usageData.provider} kredi bakiyeniz tükenmek üzere! Kalan: ${usageData.remaining.toFixed(2)}
       </span>
     </div>
   );
