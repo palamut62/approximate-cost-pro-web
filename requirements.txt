@@ -4,3 +4,10 @@ pandas==2.1.3
 openpyxl==3.1.2
 PyMuPDF==1.23.14
 xlsxwriter==3.1.9
+openai
+crewai
+langchain_openai
+PyQt5
+setuptools
+reportlab
+python-dotenv

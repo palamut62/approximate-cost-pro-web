@@ -12,6 +12,9 @@ import requests
 import re
 
 
+import openai
+import time
+
 class ErrorDialog(QDialog):
     """Kopyalanabilir hata mesajı gösteren dialog"""
     def __init__(self, parent=None, title="Hata", message=""):
@@ -201,7 +204,7 @@ class AIAnalysisThread(QThread):
     finished = pyqtSignal(list, str, str) # components, explanation, error
     status_update = pyqtSignal(str)
 
-    def __init__(self, description, unit, api_key, model, base_url, context_data="", gemini_key=None, gemini_model=None, provider="OpenRouter", nakliye_params=None, custom_prompt=None):
+    def __init__(self, description, unit, api_key, model, base_url, context_data="", gemini_key=None, gemini_model=None, provider="OpenRouter", nakliye_params=None, custom_prompt=None, openai_api_key=None, assistant_id=None):
         super().__init__()
         self.description = description
         self.unit = unit
@@ -212,8 +215,10 @@ class AIAnalysisThread(QThread):
         self.gemini_key = gemini_key
         self.gemini_model = gemini_model
         self.provider = provider
-        self.custom_prompt = custom_prompt  # Özel prompt
+        self.custom_prompt = custom_prompt
         self.nakliye_params = nakliye_params or {}
+        self.openai_api_key = openai_api_key
+        self.assistant_id = assistant_id
         
     def run(self):
         # Context'i tamamen devre dışı bırak - token limit aşımını önlemek için
@@ -270,6 +275,38 @@ class AIAnalysisThread(QThread):
 
         gemini_error = None
         openrouter_error = None
+        openai_error = None
+        crewai_error = None
+
+        if self.provider == "CrewAI Agent Team":
+            if self.api_key: # Reusing OpenRouter Key or OpenAI Key
+                try:
+                    self.status_update.emit("🕵️ CrewAI Ekibi Çalışıyor: Araştırmacı, Analist, Denetçi...")
+                    self.call_crewai(self.context_data, nakliye_mesafe, nakliye_k, nakliye_a, yogunluk_kum, yogunluk_moloz, yogunluk_beton, yogunluk_cimento, yogunluk_demir)
+                    return
+                except Exception as e:
+                     crewai_error = str(e)
+                     self.status_update.emit(f"⚠️ CrewAI Hatası: {e}")
+                     self.finished.emit([], "", f"CrewAI Hatası: {e}")
+                     return
+            else:
+                self.finished.emit([], "", "CrewAI için bir API Anahtarı (OpenRouter/OpenAI) gerekli!")
+                return
+
+        if self.provider == "OpenAI Assistant":
+            if self.openai_api_key and self.assistant_id:
+                try:
+                    self.status_update.emit("🤖 OpenAI Asistanı ile hesaplanıyor...")
+                    self.call_openai_assistant()
+                    return
+                except Exception as e:
+                     openai_error = str(e)
+                     self.status_update.emit(f"⚠️ OpenAI Asistan hatası: {e}")
+                     self.finished.emit([], "", f"OpenAI Asistan Hatası: {e}")
+                     return
+            else:
+                self.finished.emit([], "", "OpenAI API Anahtarı veya Asistan ID eksik!")
+                return
 
         if self.provider == "Google Gemini":
             # Birincil: Gemini
@@ -396,6 +433,93 @@ class AIAnalysisThread(QThread):
 
         Lütfen "explanation" kısmında neden bu malzemeleri ve miktarları seçtiğini, nakliye hesabını hangi formülle yaptığını detaylıca anlat.
         """
+
+
+    def call_crewai(self, context_data, nakliye_mesafe, nakliye_k, nakliye_a, Y_kum, Y_moloz, Y_beton, Y_cimento, Y_demir):
+        try:
+            from crew_backend import ConstructionCrewManager
+        except ImportError:
+             raise Exception("CrewAI modülü bulunamadı! Lütfen 'pip install crewai langchain_openai' yapın.")
+
+        # Prepare parameters for Crew
+        nakliye_params = {
+            'mesafe': nakliye_mesafe,
+            'k': nakliye_k,
+            'a': nakliye_a,
+            'yogunluk_kum': Y_kum,
+            'yogunluk_moloz': Y_moloz,
+            'yogunluk_beton': Y_beton,
+            'yogunluk_cimento': Y_cimento,
+            'yogunluk_demir': Y_demir
+        }
+
+        # Initialize Crew Manager
+        # We reuse the API Key provided. If provider is OpenRouter, base_url is set. 
+        # CrewAI supports OpenAI compatible APIs.
+        manager = ConstructionCrewManager(
+            api_key=self.api_key,
+            model_name=self.model,
+            base_url=self.base_url
+        )
+
+        # Run Analysis
+        result = manager.run_analysis(
+            description=self.description,
+            unit=self.unit,
+            context_data=context_data,
+            nakliye_params=nakliye_params
+        )
+
+        # CrewAI usually returns a string (final output of the last agent)
+        # We expect JSON string from the Auditor agent
+        
+        # Check if result is a generic object or string
+        content = str(result)
+        
+        self.process_response(content)
+
+
+    def call_openai_assistant(self):
+        client = openai.OpenAI(api_key=self.openai_api_key)
+        
+        # 1. Yeni bir sohbet (Thread) başlat
+        thread = client.beta.threads.create()
+        
+        # Kullanıcı promptu
+        user_prompt = f"Poz Tanımı: {self.description}\nBirim: {self.unit}\n\nLütfen detaylı analiz yap."
+        if self.context_data:
+            user_prompt += f"\n\nEK BİLGİ:\n{self.context_data}"
+
+        # 2. Mesajı gönder
+        client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=user_prompt
+        )
+
+        # 3. Asistanı çalıştır (Run)
+        run = client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=self.assistant_id,
+            # Instructions override is optional, the assistant already has them
+            # instructions="Lütfen çıktıları JSON formatında ver." 
+        )
+
+        # 4. Cevabı bekle (Polling)
+        while run.status != "completed":
+            if run.status in ["failed", "cancelled", "expired"]:
+                raise Exception(f"Asistan çalışması başarısız oldu: {run.status}")
+                
+            time.sleep(1) # 1 saniye bekle
+            run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
+
+        # 5. Mesajları al
+        messages = client.beta.threads.messages.list(thread_id=thread.id)
+        
+        # En son cevabı al (ilk mesaj en sonuncusudur)
+        ai_response = messages.data[0].content[0].text.value
+        
+        self.process_response(ai_response)
 
     def call_openrouter(self, prompt):
         # Prompt boyutunu kontrol et ve sınırla
@@ -585,9 +709,9 @@ class AnalysisBuilder(QWidget):
         # --- AI Button ---
         ai_layout = QHBoxLayout()
         
-        info_lbl = QLabel("Mode: OpenRouter AI")
-        info_lbl.setStyleSheet("color: gray;")
-        ai_layout.addWidget(info_lbl)
+        self.info_lbl = QLabel("Mode: OpenRouter AI")
+        self.info_lbl.setStyleSheet("color: gray;")
+        ai_layout.addWidget(self.info_lbl)
         
         self.generate_btn = QPushButton("🤖 Yapay Zeka ile Analiz Oluştur")
         self.generate_btn.setStyleSheet("""
@@ -708,7 +832,7 @@ class AnalysisBuilder(QWidget):
              QMessageBox.warning(self, "Uyarı", "OpenRouter API Anahtarı bulunamadı! Lütfen Ayarlar menüsünden ekleyin.")
              return
              
-        model = self.db.get_setting("openrouter_model") or "google/gemini-2.0-flash-exp:free"
+        model = self.db.get_setting("openrouter_model") or "openai/gpt-4o"
         base_url = self.db.get_setting("openrouter_base_url") or "https://openrouter.ai/api/v1"
         
         # Gemini Settings (Failover)
@@ -716,6 +840,17 @@ class AnalysisBuilder(QWidget):
         gemini_model = self.db.get_setting("gemini_model") or "gemini-1.5-flash"
         
         provider = self.db.get_setting("ai_provider") or "OpenRouter"
+        
+        # OpenAI Assistant Settings
+        openai_api_key = self.db.get_setting("openai_api_key")
+        assistant_id = self.db.get_setting("openai_assistant_id")
+        
+        # Update UI Provider Label
+        self.info_lbl.setText(f"Mode: {provider}")
+
+        if provider == "OpenAI Assistant" and (not openai_api_key or not assistant_id):
+             QMessageBox.warning(self, "Uyarı", "OpenAI Assistant modu için API Key ve Assistant ID gereklidir! Ayarlardan ekleyin.")
+             return
 
         # KGM 2025 Nakliye Parametrelerini Al
         nakliye_mode = self.db.get_setting("nakliye_mode") or "AI'ya Bırak (Varsayılan değerler kullanılır)"
@@ -759,7 +894,7 @@ class AnalysisBuilder(QWidget):
         # Özel prompt varsa al
         custom_prompt = self.db.get_setting("custom_analysis_prompt") or None
 
-        self.thread = AIAnalysisThread(desc, unit, api_key, model, base_url, context_text, gemini_key, gemini_model, provider, nakliye_params, custom_prompt)
+        self.thread = AIAnalysisThread(desc, unit, api_key, model, base_url, context_text, gemini_key, gemini_model, provider, nakliye_params, custom_prompt, openai_api_key, assistant_id)
         self.thread.finished.connect(self.on_ai_finished)
         self.thread.status_update.connect(lambda s: self.generate_btn.setText(s))
         self.thread.start()

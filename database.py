@@ -219,6 +219,22 @@ class DatabaseManager:
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', default_signatories)
 
+        # AI Feedback/Düzeltme Tablosu - Kullanıcı düzeltmelerinden öğrenme
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ai_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                original_prompt TEXT NOT NULL,
+                original_unit TEXT,
+                correction_type TEXT,
+                correction_description TEXT,
+                correct_components TEXT,
+                keywords TEXT,
+                created_date TEXT,
+                use_count INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1
+            )
+        ''')
+
         conn.commit()
         conn.close()
 
@@ -834,3 +850,133 @@ class DatabaseManager:
                 'date_text': sig.get('date_text', '')
             }
         return result
+
+    # --- AI Feedback Methods (Kullanıcı Düzeltmelerinden Öğrenme) ---
+
+    def save_ai_feedback(self, original_prompt: str, original_unit: str,
+                         correction_type: str, correction_description: str,
+                         correct_components: list, keywords: list = None):
+        """
+        Kullanıcının AI düzeltmesini kaydet.
+
+        Args:
+            original_prompt: Orijinal poz tanımı (örn: "beton santrali ile 1m3 taş duvar")
+            original_unit: Orijinal birim (m3, m2 vb.)
+            correction_type: Düzeltme tipi ('wrong_method', 'missing_item', 'wrong_price', 'wrong_quantity')
+            correction_description: Kullanıcının açıklaması
+            correct_components: Doğru bileşenler listesi (JSON)
+            keywords: Anahtar kelimeler listesi
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        # Anahtar kelimeleri otomatik çıkar
+        if not keywords:
+            keywords = self._extract_keywords_from_prompt(original_prompt)
+
+        cursor.execute('''
+            INSERT INTO ai_feedback
+            (original_prompt, original_unit, correction_type, correction_description,
+             correct_components, keywords, created_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            original_prompt,
+            original_unit,
+            correction_type,
+            correction_description,
+            json.dumps(correct_components, ensure_ascii=False),
+            json.dumps(keywords, ensure_ascii=False),
+            now
+        ))
+
+        feedback_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return feedback_id
+
+    def _extract_keywords_from_prompt(self, prompt: str) -> list:
+        """Prompt'tan anahtar kelimeleri çıkar"""
+        stop_words = {'ve', 'ile', 'için', 'bir', 'bu', 'de', 'da', 'den', 'dan',
+                      'nin', 'nın', 'ın', 'in', 'yapılması', 'imalatı', 'işi'}
+        words = prompt.lower().replace('/', ' ').replace('-', ' ').split()
+        keywords = [w for w in words if len(w) > 2 and w not in stop_words]
+        return keywords
+
+    def get_relevant_feedback(self, prompt: str, unit: str = None, limit: int = 5) -> list:
+        """
+        Verilen prompt için ilgili geçmiş düzeltmeleri getir.
+        Anahtar kelime eşleşmesine göre sıralar.
+        """
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            SELECT * FROM ai_feedback
+            WHERE is_active = 1
+            ORDER BY use_count DESC, created_date DESC
+        ''')
+
+        columns = [description[0] for description in cursor.description]
+        all_feedback = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+
+        if not all_feedback:
+            return []
+
+        # Prompt'tan anahtar kelimeler
+        prompt_keywords = set(self._extract_keywords_from_prompt(prompt))
+
+        # Benzerlik puanı hesapla
+        scored_feedback = []
+        for fb in all_feedback:
+            fb_keywords = set(json.loads(fb.get('keywords', '[]')))
+
+            # Kesişim puanı
+            common = prompt_keywords & fb_keywords
+            if common:
+                score = len(common) / max(len(prompt_keywords), 1)
+
+                # Birim bonusu
+                if unit and fb.get('original_unit', '').lower() == unit.lower():
+                    score += 0.2
+
+                scored_feedback.append((score, fb))
+
+        # En yüksek puanlıları döndür
+        scored_feedback.sort(key=lambda x: x[0], reverse=True)
+        return [fb for score, fb in scored_feedback[:limit] if score > 0.2]
+
+    def increment_feedback_use_count(self, feedback_id: int):
+        """Feedback kullanım sayısını artır"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE ai_feedback SET use_count = use_count + 1 WHERE id = ?', (feedback_id,))
+        conn.commit()
+        conn.close()
+
+    def get_all_feedback(self) -> list:
+        """Tüm feedback kayıtlarını getir"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM ai_feedback ORDER BY created_date DESC')
+        columns = [description[0] for description in cursor.description]
+        results = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def delete_feedback(self, feedback_id: int):
+        """Feedback kaydını sil"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM ai_feedback WHERE id = ?', (feedback_id,))
+        conn.commit()
+        conn.close()
+
+    def toggle_feedback_active(self, feedback_id: int, is_active: bool):
+        """Feedback aktiflik durumunu değiştir"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE ai_feedback SET is_active = ? WHERE id = ?', (1 if is_active else 0, feedback_id))
+        conn.commit()
+        conn.close()

@@ -1,13 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dir)",
-      "Bash(python:*)",
-      "Bash(dir:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)"
-    ],
-    "deny": [],
-    "ask": []
+      "WebSearch",
+      "Bash(find:*)",
+      "Bash(python3:*)",
+      "Bash(PYTHONPATH=/home/aras/Masaüstü/UYGULAMALARIM/approximate_cost python3:*)"
+    ]
   }
 }

@@ -1,0 +1,922 @@
+import sys
+import fitz  # PyMuPDF
+import re
+import pandas as pd
+from pathlib import Path
+import json
+import hashlib
+import os
+from datetime import datetime
+import csv
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QGridLayout, QLabel, QLineEdit,
+                             QPushButton, QTableWidget, QTableWidgetItem,
+                             QTextEdit, QFileDialog, QMessageBox, QProgressBar,
+                             QGroupBox, QHeaderView, QSplitter, QTabWidget,
+                             QComboBox, QSpinBox, QDoubleSpinBox, QFrame, QCheckBox,
+                             QListWidget, QListWidgetItem, QDialog, QFormLayout)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QPropertyAnimation, QRect, QUrl, QSize
+from PyQt5.QtGui import QFont, QIcon, QDesktopServices, QPixmap, QColor
+from cost_estimator import CostEstimator
+from analysis_builder import AnalysisBuilder
+from custom_analysis_manager import CustomAnalysisManager
+from quantity_takeoff_manager import QuantityTakeoffManager
+
+
+from core.pdf_engine import PDFSearchEngine
+class CSVDataManager:
+    """PDF klasöründeki CSV dosyalarından pozları yönetir"""
+
+    def __init__(self):
+        self.csv_folder = Path(__file__).parent.parent / "PDF"
+        self.poz_data = {}  # Poz No -> Poz Verisi
+        # self.load_csv_files() # Blocking call removed
+
+    def load_csv_files(self):
+        """PDF klasöründeki tüm CSV dosyalarını yükle (Sync)"""
+        # Kept for backward compatibility if needed logic
+        if not self.csv_folder.exists():
+            print(f"CSV klasörü bulunamadı: {self.csv_folder}")
+            return
+
+        csv_files = list(self.csv_folder.glob("*.csv"))
+        if not csv_files:
+            return
+
+        print(f"Bulunan CSV dosyaları (Sync): {len(csv_files)}")
+        for csv_file in csv_files:
+            self.load_single_csv(csv_file)
+
+        csv_files = list(self.csv_folder.glob("*.csv"))
+        if not csv_files:
+            print("CSV dosyası bulunamadı")
+            return
+
+        print(f"Bulunan CSV dosyaları: {len(csv_files)}")
+        for csv_file in csv_files:
+            self.load_single_csv(csv_file)
+
+    def load_single_csv(self, csv_path):
+        """Tek bir CSV dosyasını yükle"""
+        try:
+            df = pd.read_csv(csv_path, encoding='utf-8-sig')
+            print(f"CSV yüklendi: {csv_path.name} ({len(df)} satır)")
+
+            # Gerekli sütunları kontrol et
+            required_columns = ['Poz No', 'Açıklama', 'Kurum']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+
+            if missing_columns:
+                print(f"⚠️ Uyarı: {csv_path.name} dosyasında eksik sütunlar: {missing_columns}")
+                return
+
+            # Pozları indexe ekle
+            for idx, row in df.iterrows():
+                poz_no = str(row['Poz No']).strip()
+
+                poz_info = {
+                    'poz_no': poz_no,
+                    'description': str(row.get('Açıklama', '')).strip(),
+                    'unit': str(row.get('Birim', '')).strip(),
+                    'quantity': str(row.get('Miktar', '')).strip(),
+                    'quantity': str(row.get('Miktar', '')).strip(),
+                    'institution': str(row.get('Kurum', '')).strip(),
+                    'source_file': csv_path.name
+                }
+                
+                # Fiyat sütununu bulmak için alternatifleri kontrol et
+                price_cols = ['Birim Fiyatı (TL)', 'Birim Fiyatı', 'Birim Fiyat', 'Fiyat', 'Fiyatı', '2024 Birim Fiyatı', '2025 Birim Fiyatı']
+                for col in price_cols:
+                    if col in row:
+                        val = str(row.get(col, '')).strip()
+                        if val and val.lower() != 'nan':
+                            poz_info['unit_price'] = val
+                            break
+                            
+                if 'unit_price' not in poz_info:
+                     poz_info['unit_price'] = '0,00'
+
+                self.poz_data[poz_no] = poz_info
+
+        except Exception as e:
+            print(f"CSV yükleme hatası ({csv_path.name}): {str(e)}")
+
+    def search_poz(self, poz_no: str):
+        """Poz numarası ile arama"""
+        poz_no = poz_no.strip()
+        if poz_no in self.poz_data:
+            return self.poz_data[poz_no]
+        return None
+
+    def search_keyword(self, keyword: str):
+        """Anahtar kelime ile arama"""
+        results = []
+        keyword_lower = keyword.lower()
+
+        for poz_no, poz_info in self.poz_data.items():
+            if (keyword_lower in poz_info['description'].lower() or
+                    keyword_lower in poz_info['institution'].lower() or
+                    keyword_lower in poz_no):
+                results.append(poz_info)
+
+        return results
+
+    def get_all_pozlar(self):
+        """Tüm pozları getir"""
+        return list(self.poz_data.values())
+
+    def get_institutions(self):
+        """Tüm benzersiz kurumları getir"""
+        institutions = set()
+        for poz_info in self.poz_data.values():
+            if poz_info['institution']:
+                institutions.add(poz_info['institution'])
+        return sorted(list(institutions))
+
+
+class LoadingThread(QThread):
+    progress_signal = pyqtSignal(str, int, int)
+    finished_signal = pyqtSignal(int)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, search_engine, files):
+        super().__init__()
+        self.search_engine = search_engine
+        self.files = files
+        self._stop_requested = False
+
+    def stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        loaded_count = 0
+        for i, file_path in enumerate(self.files):
+            if self._stop_requested:
+                break
+            try:
+                file_name = Path(file_path).name
+                self.progress_signal.emit(file_name, i + 1, len(self.files))
+
+                if self.search_engine.load_pdf(str(file_path)):
+                    loaded_count += 1
+
+            except Exception as e:
+                self.error_signal.emit(f"Hata - {file_name}: {str(e)}")
+
+        self.finished_signal.emit(loaded_count)
+
+
+class PozAnalyzer(QThread):
+    """PDF'lerden poz analizlerini çeken sınıf"""
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(dict)
+
+    def __init__(self, analiz_folder):
+        super().__init__()
+        self.analiz_folder = Path(analiz_folder)
+        self.poz_analyses = {}
+        self._stop_requested = False
+
+    def stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        """PDF'leri analiz et"""
+        pdf_files = sorted(self.analiz_folder.glob("*.pdf"))
+
+        if not pdf_files:
+            self.progress.emit("ANALIZ klasöründe PDF bulunamadı!")
+            self.finished.emit({})
+            return
+
+        self.progress.emit(f"Bulunan {len(pdf_files)} PDF analiz ediliyor...")
+
+        for pdf_file in pdf_files:
+            if self._stop_requested:
+                break
+            self.progress.emit(f"İşleniyor: {pdf_file.name}")
+            self._extract_from_pdf(str(pdf_file))
+
+        self.progress.emit(f"Toplam {len(self.poz_analyses)} poz analizi bulundu")
+        self.finished.emit(self.poz_analyses)
+
+    def _extract_from_pdf(self, pdf_path):
+        """PDF'den poz analizlerini çıkar"""
+        try:
+            doc = fitz.open(pdf_path)
+            lines_all = []
+
+            # Tüm sayfaları birleştir
+            for page in doc:
+                text = page.get_text()
+                lines = text.split('\n')
+                lines_all.extend(lines)
+
+            doc.close()
+
+            # Poz analizlerini çıkar
+            i = 0
+            while i < len(lines_all):
+                line = lines_all[i].strip()
+
+                # POZ NUMARASI TESPİTİ (15.xxx.xxxx veya 19.xxx.xxxx)
+                if re.match(r'^(15|19)\.\d{3}\.\d{4}$', line):
+                    poz_no = line
+
+                    # Poz açıklaması - genellikle 3. satır sonrası
+                    description = ""
+                    unit = ""
+
+                    # Sayfanın sonraki 20 satırında açıklamayı ve birimi ara
+                    for j in range(i + 1, min(i + 20, len(lines_all))):
+                        current = lines_all[j].strip()
+
+                        # İlk satırı atla (genellikle "Poz No" veya "Analizin Adı")
+                        if j == i + 1 or j == i + 2:
+                            continue
+
+                        # Açıklamayı bul (genellikle 3. satır)
+                        if j == i + 3 and not description:
+                            description = current
+
+                        # Ölçü birimini bul
+                        if "Ölçü Birimi" in current and not unit:
+                            if j + 1 < len(lines_all):
+                                unit_candidate = lines_all[j + 1].strip()
+                                if unit_candidate and unit_candidate not in ["Miktarı", "Birim Fiyatı", "Tutarı (TL)"]:
+                                    unit = unit_candidate
+                                    break
+
+                    # Alt analizleri çıkar
+                    sub_analyses = self._extract_sub_analyses(lines_all, i)
+
+                    # Özet bilgileri çıkar
+                    summary = self._extract_summary(lines_all, i)
+
+                    # Poz analizini kaydet
+                    self.poz_analyses[poz_no] = {
+                        'poz_no': poz_no,
+                        'description': description,
+                        'unit': unit,
+                        'sub_analyses': sub_analyses,
+                        'summary': summary,
+                        'file': Path(pdf_path).name
+                    }
+
+                i += 1
+
+        except Exception as e:
+            print(f"PDF işleme hatası {pdf_path}: {e}")
+
+    def _extract_sub_analyses(self, lines, start_idx):
+        """Alt analizleri çıkar (10.xxx.xxxx veya 19.xxx.xxxx)"""
+        sub_analyses = []
+        current_type = ""  # "Malzeme" veya "İşçilik"
+
+        # Başlangıç pozunu sakla (kendi kodunu almamak için)
+        start_poz_no = lines[start_idx].strip() if start_idx < len(lines) else ""
+
+        # NEXT POZ SINIRINII BUL: Sonraki ana poz'un satır numarasını bul
+        next_poz_idx = len(lines)
+        for next_idx in range(start_idx + 1, min(start_idx + 500, len(lines))):
+            line_stripped = lines[next_idx].strip()
+            if re.match(r'^(15|19)\.\d{3}\.\d{4}$', line_stripped):
+                # Bu 15/19.xxx kodu, "Poz No" başlığının hemen sonrasında mı?
+                is_main_poz = False
+                for prev_idx in range(max(0, next_idx - 3), next_idx):
+                    if lines[prev_idx].strip() == "Poz No":
+                        is_main_poz = True
+                        break
+
+                if is_main_poz:
+                    # Sonraki ana poz bulundu
+                    next_poz_idx = next_idx
+                    break
+
+        # Alt analiz kodlarını ara (10.100.xxxx veya 19.100.xxxx)
+        i = start_idx + 1  # Başlangıç pozü atla
+        while i < min(next_poz_idx, start_idx + 500, len(lines)):
+            line = lines[i].strip()
+
+            # Poz'un ÖZET bölümüne ulaştık demek ki daha fazla sub-analiz yok
+            line_lower = line.lower()
+
+            # Analiz-1: Malzeme + İşçilik Tutar
+            # if ("tutar" in line_lower and ("malzeme" in line_lower or "malz" in line_lower) and
+            #     (any(variant in line_lower for variant in ["işçilik", "isçilik", "iscilik", "iş", "~"]) or
+            #      len(line) > 10 and "+" in line)):
+            #     pass # break removed to ensure full scan
+
+            # Analiz-2: unit + "Fiyatı" pattern
+            # if ("fiyat" in line_lower and line.startswith("1 ") and
+            #     any(unit in line_lower for unit in ["sa ", "m3 ", "m² ", "m2 ", "ton ", "kg ", "dk ", "gün ", "l ", "lt"])):
+            #     pass # break removed
+
+            # Yeni pozun başlangıç işareti
+            if line == "Poz No" and i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
+                if re.match(r'^(15|19)\.\d{3}\.\d{4}$', next_line):
+                    break
+
+            # Malzeme/İşçilik başlıklarını tespit et
+            line_lower = line.lower()
+            is_type_header = (line in ["Malzeme", "İşçilik", "MALZEME", "İŞÇİLİK"] or
+                             line_lower in ["malzeme", "işçilik"] or
+                             line_lower.startswith("malz") or
+                             line_lower.startswith("isç") or
+                             line_lower == "iscilik" or
+                             (len(line) < 15 and line_lower.startswith("is") and len(line) > 4))
+
+            if is_type_header and line.strip():
+                current_type = line
+                i += 1
+                # Başlık altındaki açıklamalar/boş satırları atla
+                while i < min(start_idx + 500, len(lines)):
+                    if re.match(r'^(10|19|15)\.\d{3}\.\d{4}$', lines[i].strip()):
+                        break
+                    i += 1
+                continue
+
+            # Alt analiz kodu tespiti
+            if line.startswith("(") or line.startswith(")"):
+                i += 1
+                continue
+
+            if re.match(r'^(10|19|15)\.\d{3}\.\d{4}$', line):
+                code = line
+
+                # ANA POZ KONTROLÜ
+                is_main_poz = False
+                for prev_idx in range(max(0, i - 3), i):
+                    if lines[prev_idx].strip() == "Poz No":
+                        is_main_poz = True
+                        break
+
+                if is_main_poz:
+                    i += 1
+                    continue
+
+                name = ""
+                unit = ""
+                qty_str = ""
+                price_str = ""
+
+                # Sonraki satırlardan veri topla
+                j = i + 1
+                name_lines = []
+                max_name_lines = 10
+
+                while j < len(lines) and len(name_lines) < max_name_lines:
+                    current = lines[j].strip()
+
+                    # Boş satırı geç
+                    if not current:
+                        j += 1
+                        continue
+
+                    # AÇIKLAMA SATIRI TESPİTİ
+                    is_pure_number = current.replace(',', '').replace('.', '').replace('-', '').replace('+', '').isdigit()
+                    if is_pure_number and len(current) < 20:
+                        j += 1
+                        continue
+
+                    # Birim satırı bulundu
+                    known_units = ["Sa", "Kg", "m³", "m", "m²", "L", "dk", "Saat", "kg", "ha", "gün",
+                                  "ton", "Ton", "mL", "cm", "mm", "km", "t", "hm"]
+                    is_unit = current in known_units
+
+                    # Veya çok kısa alfanumerik
+                    if not is_unit:
+                        cleaned = current.replace('³', '').replace('²', '')
+                        is_unit = (len(current) <= 3 and
+                                  all(c.isalpha() or c in '³²' for c in current) and
+                                  current not in ["Su", "Yal", "Bez", "Cam", "Yer", "Yol"])
+
+                    if is_unit:
+                        unit = current
+                        # Birim buldu, sonra miktar ve fiyat gelecek
+                        qty_str = lines[j + 1].strip() if j + 1 < len(lines) else ""
+                        price_str = lines[j + 2].strip() if j + 2 < len(lines) else ""
+                        break
+                    else:
+                        # Ad'ın devamı, topla
+                        name_lines.append(current)
+
+                    j += 1
+
+                name = " ".join(name_lines)
+
+                # Veri kontrolü ve dönüştürme
+                if name and unit and qty_str and price_str:
+                    try:
+                        # Türkçe number format dönüştür
+                        qty = float(qty_str.replace(',', '.'))
+                        # Fiyat binler ayırıcısı ile olabilir
+                        price = float(price_str.replace('.', '').replace(',', '.'))
+                        total = qty * price
+
+                        sub_analyses.append({
+                            'type': current_type,
+                            'code': code,
+                            'name': name,
+                            'unit': unit,
+                            'quantity': f"{qty:.3f}".replace('.', ','),
+                            'unit_price': f"{price:.2f}".replace('.', ','),
+                            'total': f"{total:.2f}".replace('.', ',')
+                        })
+                    except Exception as e:
+                        pass
+
+            i += 1
+
+        return sub_analyses
+
+    def _extract_summary(self, lines, start_idx):
+        """Özet bilgileri çıkar (Malzeme+İşçilik, Yüklenici kârı, Fiyat)"""
+        summary = {'subtotal': '', 'overhead': '', 'unit_price': ''}
+
+        for i in range(start_idx, min(start_idx + 50, len(lines))):
+            line = lines[i].strip()
+
+            if "Malzeme + İşçilik" in line or "Malzeme+İşçilik" in line:
+                if i + 1 < len(lines):
+                    summary['subtotal'] = lines[i + 1].strip()
+
+            elif "25 %" in line or "%25" in line:
+                if i + 1 < len(lines):
+                    summary['overhead'] = lines[i + 1].strip()
+
+            elif "1 m" in line and "Fiyatı" in line:
+                if i + 1 < len(lines):
+                    summary['unit_price'] = lines[i + 1].strip()
+
+        return summary
+
+
+class CSVLoaderThread(QThread):
+    """CSV ve PDF dosyalarını arka planda yükleyen thread (Cache destekli)"""
+    finished = pyqtSignal(dict, int, list) # data, count, loaded_files
+    error = pyqtSignal(str)
+    progress = pyqtSignal(str) # Progress mesajı
+
+    def __init__(self, csv_folder):
+        super().__init__()
+        self.csv_folder = csv_folder
+        self._stop_requested = False
+        self.cache_dir = Path(__file__).parent / "cache"
+        self.cache_file = self.cache_dir / "poz_data_cache.json"
+
+    def stop(self):
+        self._stop_requested = True
+
+    def get_file_hash(self, file_path):
+        """Dosya hash'i hesapla"""
+        try:
+            stat = file_path.stat()
+            hash_string = f"{file_path.name}_{stat.st_size}_{stat.st_mtime}"
+            return hashlib.md5(hash_string.encode()).hexdigest()
+        except Exception:
+            return None
+
+    def load_cache(self):
+        """Cache'den poz verilerini yükle"""
+        try:
+            if not self.cache_file.exists():
+                return None, None, None
+
+            with open(self.cache_file, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+
+            # Dosya hash'lerini kontrol et
+            file_hashes = cache_data.get('file_hashes', {})
+
+            # Mevcut dosyaları al
+            current_files = {}
+            if self.csv_folder.exists():
+                for f in self.csv_folder.glob("*.csv"):
+                    current_files[f.name] = self.get_file_hash(f)
+                for f in self.csv_folder.glob("*.pdf"):
+                    current_files[f.name] = self.get_file_hash(f)
+
+            # Dosya değişikliği kontrolü
+            cached_files = set(file_hashes.keys())
+            current_file_names = set(current_files.keys())
+
+            # Yeni dosya var mı?
+            if current_file_names - cached_files:
+                return None, None, None
+
+            # Silinen dosya var mı?
+            if cached_files - current_file_names:
+                return None, None, None
+
+            # Hash değişmiş mi?
+            for fname, fhash in current_files.items():
+                if file_hashes.get(fname) != fhash:
+                    return None, None, None
+
+            # Cache geçerli
+            return (
+                cache_data.get('poz_data', {}),
+                cache_data.get('loaded_files', []),
+                cache_data.get('timestamp', '')
+            )
+
+        except Exception as e:
+            print(f"Cache yükleme hatası: {e}")
+            return None, None, None
+
+    def save_cache(self, poz_data, loaded_files):
+        """Poz verilerini cache'e kaydet"""
+        try:
+            self.cache_dir.mkdir(exist_ok=True)
+
+            # Dosya hash'lerini hesapla
+            file_hashes = {}
+            if self.csv_folder.exists():
+                for f in self.csv_folder.glob("*.csv"):
+                    file_hashes[f.name] = self.get_file_hash(f)
+                for f in self.csv_folder.glob("*.pdf"):
+                    file_hashes[f.name] = self.get_file_hash(f)
+
+            cache_data = {
+                'timestamp': datetime.now().isoformat(),
+                'poz_data': poz_data,
+                'loaded_files': loaded_files,
+                'file_hashes': file_hashes
+            }
+
+            with open(self.cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+
+            print(f"Poz cache kaydedildi: {len(poz_data)} poz, {len(loaded_files)} dosya")
+            return True
+        except Exception as e:
+            print(f"Cache kaydetme hatası: {e}")
+            return False
+
+    def run(self):
+        try:
+            # Önce cache'i kontrol et
+            self.progress.emit("Cache kontrol ediliyor...")
+            cached_data, cached_files, cache_time = self.load_cache()
+
+            if cached_data is not None:
+                self.progress.emit(f"Cache'den yüklendi ({len(cached_data)} poz)")
+                self.finished.emit(cached_data, len(cached_data), cached_files)
+                return
+
+            poz_data = {}
+            loaded_files = []
+
+            if not self.csv_folder.exists():
+                self.error.emit(f"PDF klasörü bulunamadı: {self.csv_folder}")
+                return
+
+            # CSV dosyalarını yükle
+            csv_files = list(self.csv_folder.glob("*.csv"))
+            self.progress.emit(f"CSV dosyaları taranıyor... ({len(csv_files)} dosya)")
+
+            for csv_path in csv_files:
+                if self._stop_requested:
+                    break
+                try:
+                    df = pd.read_csv(csv_path, encoding='utf-8-sig')
+
+                    # Sütun kontrolü
+                    required_columns = ['Poz No', 'Açıklama', 'Kurum']
+                    missing_columns = [col for col in required_columns if col not in df.columns]
+
+                    if missing_columns:
+                        continue
+
+                    csv_poz_count = 0
+                    for idx, row in df.iterrows():
+                        poz_no = str(row['Poz No']).strip()
+
+                        poz_info = {
+                            'poz_no': poz_no,
+                            'description': str(row.get('Açıklama', '')).strip(),
+                            'unit': str(row.get('Birim', '')).strip(),
+                            'quantity': str(row.get('Miktar', '')).strip(),
+                            'institution': str(row.get('Kurum', '')).strip(),
+                            'source_file': csv_path.name
+                        }
+
+                        # Fiyat parse
+                        price_cols = ['Birim Fiyatı (TL)', 'Birim Fiyatı', 'Birim Fiyat', 'Fiyat', 'Fiyatı', '2024 Birim Fiyatı', '2025 Birim Fiyatı']
+                        for col in price_cols:
+                            if col in row:
+                                val = str(row.get(col, '')).strip()
+                                if val and val.lower() != 'nan':
+                                    poz_info['unit_price'] = val
+                                    break
+
+                        if 'unit_price' not in poz_info:
+                             poz_info['unit_price'] = '0,00'
+
+                        poz_data[poz_no] = poz_info
+                        csv_poz_count += 1
+
+                    loaded_files.append({
+                        'name': csv_path.name,
+                        'type': 'CSV',
+                        'poz_count': csv_poz_count
+                    })
+
+                except Exception as e:
+                    print(f"CSV Okuma hatası {csv_path}: {e}")
+
+            # PDF dosyalarını yükle
+            pdf_files = list(self.csv_folder.glob("*.pdf"))
+            self.progress.emit(f"PDF dosyaları taranıyor... ({len(pdf_files)} dosya)")
+
+            for pdf_path in pdf_files:
+                if self._stop_requested:
+                    break
+                try:
+                    self.progress.emit(f"PDF yükleniyor: {pdf_path.name}")
+                    pdf_poz_count = self.extract_pozlar_from_pdf(pdf_path, poz_data)
+
+                    if pdf_poz_count > 0:
+                        loaded_files.append({
+                            'name': pdf_path.name,
+                            'type': 'PDF',
+                            'poz_count': pdf_poz_count
+                        })
+
+                except Exception as e:
+                    print(f"PDF Okuma hatası {pdf_path}: {e}")
+
+            # Cache'e kaydet
+            self.save_cache(poz_data, loaded_files)
+
+            self.finished.emit(poz_data, len(poz_data), loaded_files)
+
+        except Exception as e:
+            self.error.emit(str(e))
+
+    def extract_pozlar_from_pdf(self, pdf_path, poz_data):
+        """PDF dosyasından pozları çıkar - Koordinat tabanlı satır birleştirme ile"""
+        try:
+            doc = fitz.open(pdf_path)
+            poz_count = 0
+
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                
+                # Koordinat tabanlı metin çıkarma ("dict")
+                blocks = page.get_text("dict")
+                
+                # Tüm metin parçalarını düz bir listede topla
+                text_items = []
+                for block in blocks["blocks"]:
+                    if "lines" in block:
+                        for line in block["lines"]:
+                            for span in line["spans"]:
+                                text = span['text'].strip()
+                                if text:
+                                    text_items.append({
+                                        'text': text,
+                                        'y': span['bbox'][1], # Y koordinatı (üst)
+                                        'x': span['bbox'][0], # X koordinatı (sol)
+                                        'height': span['bbox'][3] - span['bbox'][1]
+                                    })
+
+                # Y koordinatına göre sırala
+                text_items.sort(key=lambda item: item['y'])
+
+                # Satırları oluştur (Y toleransına göre grupla)
+                rows = []
+                if text_items:
+                    current_row = [text_items[0]]
+                    current_y = text_items[0]['y']
+                    # Yüksekliğin yarısı kadar tolerans
+                    tolerance = text_items[0]['height'] / 2 if text_items[0]['height'] > 0 else 5
+                    
+                    for item in text_items[1:]:
+                        if abs(item['y'] - current_y) <= tolerance:
+                            current_row.append(item)
+                        else:
+                            # Satırı X'e göre sırala ve birleştir
+                            current_row.sort(key=lambda i: i['x'])
+                            rows.append(" ".join([i['text'] for i in current_row]))
+                            
+                            current_row = [item]
+                            current_y = item['y']
+                            tolerance = item['height'] / 2 if item['height'] > 0 else 5
+                    
+                    # Son satırı ekle
+                    if current_row:
+                        current_row.sort(key=lambda i: i['x'])
+                        rows.append(" ".join([i['text'] for i in current_row]))
+
+                # Oluşturulan satırları işle
+                for line in rows:
+                    if not line:
+                        continue
+
+                    # Poz numarası pattern'leri
+                    poz_patterns = [
+                        r'^(\d{2}\.\d{3}\.\d{4})',  # 10.110.1003
+                        r'^(\d{2}\.\d{3})',         # 02.017
+                        r'^([A-Z]{1,3}\.\d{2,3}\.\d{3})',  # Y.15.140
+                        r'^([A-Z]{2,3}\.\d{3})',  # MSB.700
+                    ]
+
+                    poz_no = None
+                    for pattern in poz_patterns:
+                        match = re.match(pattern, line)
+                        if match:
+                            poz_no = match.group(1)
+                            break
+
+                    if poz_no and poz_no not in poz_data:
+                        # Açıklama ve fiyat çıkar
+                        remaining = line[len(poz_no):].strip()
+
+                        # 1. Fiyat bulmaya çalış
+                        # Regex: Sayı + (TL/₺ veya satır sonu)
+                        price_candidates = re.findall(r'(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:TL|₺|$)', remaining)
+                        
+                        unit_price = '0,00'
+                        description = remaining
+
+                        if price_candidates:
+                            # Aday fiyatların sayısal kontrolünü yap
+                            valid_prices = []
+                            for p in price_candidates:
+                                try:
+                                    val = float(p.replace('.', '').replace(',', '.'))
+                                    if val > 0: # 0'dan büyük olmalı
+                                        valid_prices.append((val, p))
+                                except:
+                                    pass
+                            
+                            if valid_prices:
+                                # Genellikle en sondaki fiyat birim fiyattır (bazı satırlarda miktar da sayı olabilir)
+                                # Ama miktar bazen fiyatın önüne gelir.
+                                # Basit yaklaşım: En sondaki geçerli sayıyı fiyat al
+                                _, final_price_str = valid_prices[-1]
+                                unit_price = final_price_str
+                                
+                                # Fiyatı açıklamadan temizle
+                                pidx = remaining.rfind(final_price_str)
+                                if pidx > 0:
+                                    description = remaining[:pidx].strip()
+
+                        # 2. Birim bulmaya çalış
+                        unit = ''
+                        unit_patterns = ['m³', 'm²', 'm2', 'm3', 'ton', 'kg', 'adet', 'lt', 'sa', 'gün', 'ay']
+                        for u in unit_patterns:
+                             # Tam kelime eşleşmesi için regex
+                            if re.search(r'\b' + re.escape(u) + r'\b', description, re.IGNORECASE):
+                                unit = u
+                                break
+
+                        # 3. Kurum Tahmini
+                        institution = 'ÇŞB'
+                        if poz_no.startswith('10.') or poz_no.startswith('15.') or poz_no.startswith('25.'):
+                             institution = 'ÇŞB'
+                        elif poz_no.startswith('MSB'):
+                             institution = 'MSB'
+                        elif poz_no.startswith('KGM'):
+                             institution = 'KGM'
+                        elif poz_no.startswith('İLLER'):
+                             institution = 'İLLER'
+
+                        poz_info = {
+                            'poz_no': poz_no,
+                            'description': description[:200] if description else f"Poz: {poz_no}",
+                            'unit': unit,
+                            'quantity': '',
+                            'institution': institution,
+                            'unit_price': unit_price,
+                            'source_file': pdf_path.name
+                        }
+
+                        poz_data[poz_no] = poz_info
+                        poz_count += 1
+
+            doc.close()
+            return poz_count
+
+        except Exception as e:
+            print(f"PDF poz çıkarma hatası {pdf_path}: {e}")
+            return 0
+
+class ExtractorWorkerThread(QThread):
+    """PDF → CSV çıkartma işlemini thread'de çalıştır"""
+
+    progress = pyqtSignal(str, int)  # message, progress
+    finished = pyqtSignal(str)  # result_text
+    error = pyqtSignal(str)  # error_message
+
+    def __init__(self):
+        super().__init__()
+        self.pdf_folder = Path(__file__).parent.parent / "PDF"
+        self._stop_requested = False
+
+    def stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        try:
+            from poz_extractor_app import PDFPozExtractor
+
+            # PDF dosyalarını bul
+            pdf_files = list(self.pdf_folder.glob("*.pdf"))
+            if not pdf_files:
+                self.error.emit("PDF klasöründe dosya bulunamadı!")
+                return
+
+            self.progress.emit(f"Bulunan PDF dosyaları: {len(pdf_files)}", 10)
+
+            # Pozları çıkart
+            extractor = PDFPozExtractor()
+            all_results = []
+            total_files = len(pdf_files)
+
+            for idx, pdf_file in enumerate(pdf_files):
+                if self._stop_requested:
+                    break
+                try:
+                    self.progress.emit(f"İşleniyor: {pdf_file.name}", int(20 + (70 * idx / total_files)))
+
+                    results = extractor.extract_poz_from_pdf(str(pdf_file))
+                    all_results.extend(results)
+
+                except Exception as e:
+                    self.error.emit(f"Hata - {pdf_file.name}: {str(e)}")
+
+            self.progress.emit(f"Toplam {len(all_results)} poz çıkartıldı", 90)
+
+            # CSV'ye kaydet
+            from datetime import datetime
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            csv_file = self.pdf_folder / f"pozlar_{timestamp}.csv"
+
+            if extractor.export_to_csv(str(csv_file), all_results):
+                self.progress.emit(f"CSV kaydedildi: {csv_file.name}", 100)
+                self.finished.emit("CSV dosyası başarıyla oluşturuldu!")
+            else:
+                self.error.emit("CSV kaydedilemedi!")
+
+        except Exception as e:
+            self.error.emit(f"Genel hata: {str(e)}")
+
+
+class BackgroundExtractorThread(QThread):
+    """PDF → CSV çıkartma işlemini arka planda sessizce çalıştır (UI göstermez)"""
+
+    finished = pyqtSignal(str)  # result_message
+    error = pyqtSignal(str)  # error_message
+
+    def __init__(self):
+        super().__init__()
+        self.pdf_folder = Path(__file__).parent / "PDF"
+        self._stop_requested = False
+
+    def stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        try:
+            from poz_extractor_app import PDFPozExtractor
+
+            # PDF dosyalarını bul
+            pdf_files = list(self.pdf_folder.glob("*.pdf"))
+            if not pdf_files:
+                self.error.emit("PDF klasöründe dosya bulunamadı!")
+                return
+
+            # Pozları çıkart
+            extractor = PDFPozExtractor()
+            all_results = []
+            total_files = len(pdf_files)
+
+            for pdf_file in pdf_files:
+                if self._stop_requested:
+                    break
+                try:
+                    results = extractor.extract_poz_from_pdf(str(pdf_file))
+                    all_results.extend(results)
+
+                except Exception as e:
+                    # Sessizce devam et, hata sayılmaz
+                    pass
+
+            # CSV'ye kaydet
+            from datetime import datetime
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            csv_file = self.pdf_folder / f"pozlar_{timestamp}.csv"
+
+            if extractor.export_to_csv(str(csv_file), all_results):
+                result_msg = f"CSV başarıyla güncellendi ({len(all_results)} poz)"
+                self.finished.emit(result_msg)
+            else:
+                self.error.emit("CSV kaydedilemedi!")
+
+        except Exception as e:
+            self.error.emit(f"Çıkartma hatası: {str(e)}")
+
