@@ -1,0 +1,73 @@
+
+🚀 Testler başlatılıyor...
+
+
+============================================================
+🧪 AI ANALİZ TEST SUITE
+============================================================
+Toplam senaryo: 4
+Kategori filtresi: basit
+API URL: http://localhost:8000
+
+[1/4] 
+🧪 Test: simple_wall_001
+   Tanım: 10 m² tuğla duvar örülmesi
+   ⏳ API çağrılıyor...
+   ❌ BAŞARISIZ
+      - Miktar aralık dışı: 63.0 (beklenen: 200-300)
+      - Bileşen bulunamadı: Malzeme - Harç
+      - İşçilik bulunamadı (zorunlu)
+      - Toplam fiyat aralık dışı: 1708.06 TL (beklenen: 5000-20000 TL)
+
+[2/4] 
+🧪 Test: simple_concrete_001
+   Tanım: 5 m³ C25/30 hazır beton dökümü
+   ⏳ API çağrılıyor...
+   ❌ BAŞARISIZ
+      - Miktar aralık dışı: 1.02 (beklenen: 4.8-5.2)
+      - Miktar aralık dışı: 6.12 (beklenen: 25-40)
+      - İşçilik bulunamadı (zorunlu)
+      - Toplam fiyat aralık dışı: 6434.98 TL (beklenen: 15000-40000 TL)
+
+[3/4] 
+🧪 Test: simple_tile_001
+   Tanım: 30 m² seramik kaplama
+   ⏳ API çağrılıyor...
+   ❌ HATA: API hatası: HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=60)
+
+[4/4] 
+🧪 Test: simple_excavation_001
+   Tanım: 50 m³ temel kazısı
+   ⏳ API çağrılıyor...
+   ❌ BAŞARISIZ
+      - Bileşen bulunamadı: İşçilik - Kazı
+      - Bileşen bulunamadı: Nakliye - Toprak nakliye
+      - Bileşen bulunamadı: Makine - Ekskavatör
+      - İşçilik bulunamadı (zorunlu)
+      - Toplam fiyat aralık dışı: 145.94 TL (beklenen: 8000-25000 TL)
+
+============================================================
+📊 TEST RAPORU
+============================================================
+Toplam Test: 4
+✅ Başarılı: 0
+❌ Başarısız: 4
+📈 Başarı Oranı: %0.0
+============================================================
+
+❌ BAŞARISIZ TESTLER:
+
+  • simple_wall_001
+    Detay: Miktar aralık dışı: 63.0 (beklenen: 200-300); Bileşen bulunamadı: Malzeme - Harç; İşçilik bulunamadı (zorunlu); Toplam fiyat aralık dışı: 1708.06 TL (beklenen: 5000-20000 TL)
+
+  • simple_concrete_001
+    Detay: Miktar aralık dışı: 1.02 (beklenen: 4.8-5.2); Miktar aralık dışı: 6.12 (beklenen: 25-40); İşçilik bulunamadı (zorunlu); Toplam fiyat aralık dışı: 6434.98 TL (beklenen: 15000-40000 TL)
+
+  • simple_tile_001
+    Detay: Test hatası: API hatası: HTTPConnectionPool(host='localhost', port=8000): Read timed out. (read timeout=60)
+
+  • simple_excavation_001
+    Detay: Bileşen bulunamadı: İşçilik - Kazı; Bileşen bulunamadı: Nakliye - Toprak nakliye; Bileşen bulunamadı: Makine - Ekskavatör; İşçilik bulunamadı (zorunlu); Toplam fiyat aralık dışı: 145.94 TL (beklenen: 8000-25000 TL)
+
+
+⚠️  4 test başarısız oldu!

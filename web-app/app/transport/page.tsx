@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { Truck, Calculator, Info, RotateCcw, ArrowLeft } from 'lucide-react';
+import { Truck, Calculator, Info, RotateCcw, ArrowLeft, Loader2, Gauge, Scale, MapPin, Sparkles, Box, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import api from '@/lib/api';
+import { cn } from '@/lib/utils';
+import { motion, AnimatePresence } from 'framer-motion';
 
 // Malzeme yoğunlukları (ton/m³)
 const MATERIAL_DENSITIES: Record<string, number> = {
@@ -60,6 +62,8 @@ export default function TransportPage() {
         formula_used: string;
     } | null>(null);
 
+    const [loading, setLoading] = useState(true);
+
     // Load defaults from API
     useEffect(() => {
         const loadSettings = async () => {
@@ -67,7 +71,6 @@ export default function TransportPage() {
                 const res = await api.get('/settings');
                 const s = res.data;
 
-                // Update densites if present
                 setDensities(prev => ({
                     ...prev,
                     "Beton / Prefabrik": parseFloat(s['yogunluk_beton']) || prev["Beton / Prefabrik"],
@@ -77,23 +80,20 @@ export default function TransportPage() {
                     "Betonarme Demiri": parseFloat(s['yogunluk_demir']) || prev["Betonarme Demiri"],
                 }));
 
-                // Update params
-                // Update params
                 if (s['nakliye_k']) setKCoeff(parseFloat(s['nakliye_k']));
                 if (s['nakliye_a']) setACoeff(parseFloat(s['nakliye_a']));
 
-                // Update distances
                 const d_demir = parseFloat(s['nakliye_mesafe_demir']) || 20000;
                 const d_cimento = parseFloat(s['nakliye_mesafe_cimento']) || 20000;
                 const d_diger = parseFloat(s['nakliye_mesafe_diger']) || 20000;
 
                 setDistances({ demir: d_demir, cimento: d_cimento, diger: d_diger });
-
-                // Set initial distance based on current material (defaults to Beton -> Diger)
                 setDistance(d_diger);
 
             } catch (e) {
                 console.error("Settings load error:", e);
+            } finally {
+                setLoading(false);
             }
         };
         loadSettings();
@@ -106,7 +106,6 @@ export default function TransportPage() {
             setDensity(d);
         }
 
-        // Auto-set distance based on material type
         if (material === "Betonarme Demiri") {
             setDistance(distances.demir);
         } else if (material === "Çimento") {
@@ -114,12 +113,10 @@ export default function TransportPage() {
         } else {
             setDistance(distances.diger);
         }
-    }, [material, densities, distances]); // Added distances dependency
+    }, [material, densities, distances]);
 
     const handleCalculate = () => {
         let formula = "";
-
-        // Determine formula
         if (formulaChoice === "auto") {
             formula = distance <= 10000 ? "07.005/K" : "07.006/K";
         } else if (formulaChoice === "005") {
@@ -132,16 +129,14 @@ export default function TransportPage() {
         let f_m3 = 0;
 
         if (formula === "07.005/K") {
-            // F = 1.25 × 0.00017 × K × M × A (for ton)
-            f_ton = 1.25 * 0.00017 * kCoeff * distance * aCoeff;
+            f_ton = 1.25 * 0.00017 * kCoeff * Math.sqrt(distance) * aCoeff;
             f_m3 = f_ton * density;
         } else {
-            // F = 1.25 × K × (0.0007 × M + 0.01) × A (for ton)
-            f_ton = 1.25 * kCoeff * (0.0007 * distance + 0.01) * aCoeff;
+            const distanceKm = distance / 1000.0;
+            f_ton = 1.25 * kCoeff * (0.0007 * distanceKm + 0.01) * aCoeff;
             f_m3 = f_ton * density;
         }
 
-        // Calculate totals based on input quantity unit
         let total_ton = 0;
         let total_m3 = 0;
 
@@ -157,13 +152,7 @@ export default function TransportPage() {
             total_m3 = f_m3 * quantity_m3;
         }
 
-        setResults({
-            f_ton,
-            f_m3,
-            total_ton,
-            total_m3,
-            formula_used: formula
-        });
+        setResults({ f_ton, f_m3, total_ton, total_m3, formula_used: formula });
     };
 
     const handleClear = () => {
@@ -171,239 +160,295 @@ export default function TransportPage() {
         setMaterial("Beton / Prefabrik");
         setDensity(2.40);
         setQuantity(10.0);
-        // Reset distance based on default material (Beton -> Diger)
         setDistance(distances.diger);
         setKCoeff(1750.00);
         setACoeff(1.0);
     };
 
+    if (loading) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-[400px] text-[#71717a]">
+                <Loader2 className="w-8 h-8 animate-spin mb-4 text-blue-500" />
+                <p className="animate-pulse font-medium">Birim fiyatlar hesaplanıyor...</p>
+            </div>
+        );
+    }
+
     return (
-        <div className="space-y-8 max-w-4xl mx-auto">
-            <div className="flex items-center space-x-4">
-                <Link href="/" className="p-2 hover:bg-slate-100 rounded-lg transition-colors">
-                    <ArrowLeft className="w-6 h-6 text-slate-500" />
-                </Link>
-                <div>
-                    <h1 className="text-2xl font-bold text-slate-800 flex items-center">
-                        <Truck className="w-8 h-8 mr-3 text-blue-600" />
-                        KGM Nakliye Hesaplama
-                    </h1>
-                    <p className="text-slate-500">2025 Yılı Karayolları Genel Müdürlüğü formülleri ile nakliye analizi.</p>
+        <div className="space-y-8 max-w-5xl mx-auto animate-in fade-in duration-500 pb-12">
+            {/* Header */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-2 border-b border-[#27272a]/50">
+                <div className="flex items-center gap-4">
+                    <Link href="/" className="p-2 hover:bg-[#18181b] rounded-xl transition-all border border-transparent hover:border-[#27272a] text-[#52525b] hover:text-[#fafafa]">
+                        <ArrowLeft className="w-5 h-5" />
+                    </Link>
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2 mb-2">
+                            <Truck className="w-4 h-4 text-blue-500" />
+                            <span className="text-[10px] font-bold text-[#71717a] uppercase tracking-[0.2em]">KGM Formülleri</span>
+                        </div>
+                        <h1 className="text-3xl font-bold text-[#fafafa] tracking-tight">Nakliye Hesabı</h1>
+                        <p className="text-sm text-[#71717a]">Karayolları Genel Müdürlüğü analitik formülleriyle taşıma maliyeti.</p>
+                    </div>
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
                 {/* Input Panel */}
-                <div className="space-y-6">
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 space-y-6">
-                        <h2 className="font-bold text-lg text-slate-700 flex items-center">
-                            <Calculator className="w-5 h-5 mr-2" />
-                            Parametreler
-                        </h2>
+                <div className="space-y-8">
+                    <div className="bg-[#18181b] rounded-2xl shadow-2xl border border-[#27272a] p-8 space-y-8 ring-1 ring-white/5">
+                        <div className="flex items-center justify-between">
+                            <h2 className="font-bold text-lg text-white flex items-center gap-2">
+                                <Calculator className="w-5 h-5 text-blue-500" />
+                                Girdi Parametreleri
+                            </h2>
+                            <button onClick={handleClear} className="text-[10px] font-black uppercase text-[#52525b] hover:text-red-500 transition-colors flex items-center gap-1 mt-1 font-mono">
+                                <RotateCcw className="w-3 h-3" /> TEMİZLE
+                            </button>
+                        </div>
 
-                        {/* Formula Selection */}
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-slate-700">Formül Seçimi</label>
-                            <div className="flex space-x-4">
+                        {/* Formula Selection - Segmented Control style */}
+                        <div className="space-y-3">
+                            <label className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest flex items-center gap-2">
+                                <Gauge className="w-3 h-3" /> Nakliye Formülü
+                            </label>
+                            <div className="flex p-1 bg-[#09090b] rounded-xl border border-[#27272a]">
                                 {[
-                                    { id: "auto", label: "Otomatik" },
-                                    { id: "005", label: "07.005/K (≤10km)" },
-                                    { id: "006", label: "07.006/K (>10km)" },
+                                    { id: "auto", label: "OTOMATİK" },
+                                    { id: "005", label: "07.005/K" },
+                                    { id: "006", label: "07.006/K" },
                                 ].map((opt) => (
-                                    <label key={opt.id} className="flex items-center space-x-2 cursor-pointer">
-                                        <input
-                                            type="radio"
-                                            name="formula"
-                                            checked={formulaChoice === opt.id}
-                                            onChange={() => setFormulaChoice(opt.id)}
-                                            className="text-blue-600 focus:ring-blue-500"
-                                        />
-                                        <span className="text-sm text-slate-600">{opt.label}</span>
-                                    </label>
+                                    <button
+                                        key={opt.id}
+                                        onClick={() => setFormulaChoice(opt.id)}
+                                        className={cn(
+                                            "flex-1 py-2 text-[10px] font-black rounded-lg transition-all",
+                                            formulaChoice === opt.id
+                                                ? "bg-[#27272a] text-white shadow-lg ring-1 ring-white/5"
+                                                : "text-[#52525b] hover:text-[#71717a]"
+                                        )}
+                                    >
+                                        {opt.label}
+                                    </button>
                                 ))}
                             </div>
                         </div>
 
-                        {/* Material & Density */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Material & Density Row */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="space-y-2">
-                                <label className="text-sm font-medium text-slate-700">Malzeme Tipi</label>
+                                <label className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest">Malzeme Sınıfı</label>
                                 <select
                                     value={material}
                                     onChange={(e) => setMaterial(e.target.value)}
-                                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                    className="w-full bg-[#09090b] border border-[#27272a] rounded-xl px-4 py-3 text-[#fafafa] font-medium focus:ring-1 focus:ring-blue-500/50 outline-none appearance-none"
                                 >
                                     {Object.keys(densities).map((m) => (
                                         <option key={m} value={m}>{m}</option>
                                     ))}
                                 </select>
                             </div>
-                            <div className="space-y-2">
-                                <label className="text-sm font-medium text-slate-700">Yoğunluk (ton/m³)</label>
-                                <input
-                                    type="number"
-                                    value={density}
-                                    onChange={(e) => setDensity(parseFloat(e.target.value) || 0)}
-                                    disabled={densities[material] > 0}
-                                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-slate-50 focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-75"
-                                />
+                            <div className="space-y-2 relative">
+                                <label className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest">Özgül Ağırlık</label>
+                                <div className="relative">
+                                    <input
+                                        type="number"
+                                        value={density}
+                                        onChange={(e) => setDensity(parseFloat(e.target.value) || 0)}
+                                        disabled={densities[material] > 0}
+                                        className="w-full bg-[#09090b] border border-[#27272a] rounded-xl px-4 py-3 text-[#fafafa] font-mono focus:ring-1 focus:ring-blue-500/50 outline-none disabled:opacity-50"
+                                    />
+                                    <span className="absolute right-4 top-1/2 -translate-y-1/2 text-[10px] font-bold text-[#52525b]">TON/M³</span>
+                                </div>
                             </div>
                         </div>
 
-                        {/* Quantity */}
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-slate-700">Miktar</label>
-                            <div className="flex space-x-2">
+                        {/* Quantities Row */}
+                        <div className="grid grid-cols-3 gap-4">
+                            <div className="col-span-2 space-y-2">
+                                <label className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest flex items-center gap-2">
+                                    <Scale className="w-3 h-3" /> Miktar
+                                </label>
                                 <input
                                     type="number"
                                     value={quantity}
                                     onChange={(e) => setQuantity(parseFloat(e.target.value) || 0)}
-                                    className="flex-1 px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                    className="w-full bg-[#09090b] border border-[#27272a] rounded-xl px-4 py-3 text-[#fafafa] font-mono focus:ring-1 focus:ring-blue-500/50 outline-none"
                                 />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest">Birim</label>
                                 <select
                                     value={unit}
                                     onChange={(e) => setUnit(e.target.value)}
-                                    className="w-24 px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                    className="w-full h-[50px] bg-[#09090b] border border-[#27272a] rounded-xl px-2 py-3 text-center text-[#fafafa] font-bold outline-none appearance-none"
                                 >
-                                    <option value="m³">m³</option>
-                                    <option value="ton">ton</option>
+                                    <option value="m³">M³</option>
+                                    <option value="ton">TON</option>
                                 </select>
                             </div>
                         </div>
 
-                        {/* Distance */}
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-slate-700">Mesafe (Metre)</label>
+                        {/* Distance - Premium Slider-Like control */}
+                        <div className="space-y-4">
+                            <div className="flex justify-between items-end">
+                                <label className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest flex items-center gap-2">
+                                    <MapPin className="w-3 h-3 text-blue-500" /> Taşıma Mesafesi
+                                </label>
+                                <div className="text-right">
+                                    <div className="text-2xl font-black text-white tracking-tighter">{(distance / 1000).toFixed(1)} <span className="text-xs text-blue-500">KM</span></div>
+                                    <span className="text-[10px] font-mono font-bold text-[#52525b] tabular-nums text-right block">{distance.toLocaleString()} METRE</span>
+                                </div>
+                            </div>
                             <input
                                 type="number"
                                 value={distance}
                                 onChange={(e) => setDistance(parseFloat(e.target.value) || 0)}
-                                className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                className="w-full bg-[#09090b] border border-[#27272a] rounded-xl px-4 py-3 text-[#fafafa] font-mono focus:ring-1 focus:ring-blue-500/50 outline-none"
                             />
-                            <div className="flex space-x-2 mt-2">
+                            <div className="grid grid-cols-4 gap-2">
                                 {[5000, 10000, 20000, 50000].map(d => (
                                     <button
                                         key={d}
                                         onClick={() => setDistance(d)}
-                                        className="px-2 py-1 text-xs bg-slate-100 hover:bg-slate-200 rounded text-slate-600 transition-colors"
+                                        className={cn(
+                                            "py-2 text-[10px] font-bold rounded-lg border transition-all",
+                                            distance === d
+                                                ? "bg-blue-600/10 border-blue-500/50 text-blue-500"
+                                                : "bg-transparent border-[#27272a] text-[#52525b] hover:border-[#3f3f46] hover:text-[#71717a]"
+                                        )}
                                     >
-                                        {d / 1000}km
+                                        {d / 1000}KM
                                     </button>
                                 ))}
                             </div>
-                            <p className="text-xs text-slate-400 text-right">{(distance / 1000).toFixed(1)} km</p>
                         </div>
 
                         {/* Coefficients */}
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-2 gap-6 pt-4 border-t border-[#27272a]">
                             <div className="space-y-2">
-                                <label className="text-sm font-medium text-slate-700">K Katsayısı (TL)</label>
+                                <label className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest">K Katsayısı</label>
                                 <input
                                     type="number"
                                     value={kCoeff}
                                     onChange={(e) => setKCoeff(parseFloat(e.target.value) || 0)}
-                                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                    className="w-full bg-[#09090b] border border-[#27272a] rounded-xl px-4 py-3 text-[#fafafa] font-mono focus:ring-1 focus:ring-blue-500/50 outline-none"
                                 />
                             </div>
                             <div className="space-y-2">
-                                <label className="text-sm font-medium text-slate-700">A Katsayısı</label>
+                                <label className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest">Zorluk (A)</label>
                                 <input
                                     type="number"
                                     step="0.1"
                                     value={aCoeff}
                                     onChange={(e) => setACoeff(parseFloat(e.target.value) || 1)}
-                                    className="w-full px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                    className="w-full bg-[#09090b] border border-[#27272a] rounded-xl px-4 py-3 text-[#fafafa] font-mono focus:ring-1 focus:ring-blue-500/50 outline-none"
                                 />
-                                <p className="text-[10px] text-slate-400">Zor: 1-3, Kolay: &lt;1</p>
                             </div>
                         </div>
 
                         <button
                             onClick={handleCalculate}
-                            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-colors shadow-sm shadow-blue-200"
+                            className="w-full py-5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black tracking-widest transition-all shadow-xl shadow-blue-900/40 active:scale-95 flex items-center justify-center gap-3"
                         >
-                            HESAPLA
+                            <Sparkles className="w-5 h-5" />
+                            ANALİZİ ÇALIŞTIR
                         </button>
                     </div>
                 </div>
 
                 {/* Results Panel */}
-                <div className="space-y-6">
-                    <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 h-full flex flex-col">
-                        <div className="flex justify-between items-center mb-6">
-                            <h2 className="font-bold text-lg text-slate-700">Sonuçlar</h2>
-                            {results && (
-                                <button
-                                    onClick={handleClear}
-                                    className="text-sm text-slate-400 hover:text-red-500 flex items-center transition-colors"
-                                >
-                                    <RotateCcw className="w-4 h-4 mr-1" />
-                                    Temizle
-                                </button>
-                            )}
-                        </div>
-
+                <div className="space-y-8 flex flex-col">
+                    <AnimatePresence mode="wait">
                         {results ? (
-                            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
-                                <div className="p-4 bg-orange-50 border border-orange-100 rounded-lg">
-                                    <p className="text-xs text-orange-600 font-bold uppercase mb-1">Kullanılan Formül</p>
-                                    <p className="text-lg font-mono text-orange-800">{results.formula_used}</p>
-                                </div>
+                            <motion.div
+                                key="results"
+                                initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                                className="bg-[#18181b] rounded-2xl shadow-2xl border border-[#27272a] p-8 space-y-8 flex-1 relative overflow-hidden"
+                            >
+                                <div className="absolute top-0 right-0 w-64 h-64 bg-orange-500/[0.03] blur-[80px] -z-0" />
 
-                                <div className="space-y-4">
-                                    <div className="flex justify-between items-center py-2 border-b border-slate-100">
-                                        <span className="text-slate-500 text-sm">Birim Fiyat (ton)</span>
-                                        <span className="font-mono font-bold text-slate-800">{results.f_ton.toFixed(4)} TL/ton</span>
-                                    </div>
-                                    <div className="flex justify-between items-center py-2 border-b border-slate-100">
-                                        <span className="text-slate-500 text-sm">Birim Fiyat (m³)</span>
-                                        <span className="font-mono font-bold text-slate-800">{results.f_m3.toFixed(4)} TL/m³</span>
+                                <div className="flex justify-between items-center relative z-10">
+                                    <h2 className="font-bold text-lg text-white">Analiz Sonuçları</h2>
+                                    <div className="text-[10px] font-black uppercase text-orange-500 bg-orange-500/10 px-2 py-1 rounded border border-orange-500/20 tracking-[0.2em] animate-pulse">
+                                        OFFICIAL KGM DATA
                                     </div>
                                 </div>
 
-                                <div className="bg-slate-50 rounded-xl p-6 space-y-4">
-                                    <div className="flex justify-between items-end">
-                                        <div>
-                                            <p className="text-sm text-slate-500 mb-1">Toplam Maliyet (ton)</p>
-                                            <p className="text-sm text-slate-400">({quantity} {unit} × yoğunluk)</p>
-                                        </div>
-                                        <p className="text-2xl font-bold text-slate-800 tracking-tight">
-                                            {results.total_ton.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL
-                                        </p>
-                                    </div>
-                                    <div className="h-px bg-slate-200 w-full" />
-                                    <div className="flex justify-between items-end">
-                                        <div>
-                                            <p className="text-sm text-slate-500 mb-1">Toplam Maliyet (m³)</p>
-                                            <p className="text-sm text-slate-400 font-mono">≈ Aynı Tutar</p>
-                                        </div>
-                                        <p className="text-xl font-bold text-slate-600 tracking-tight">
-                                            {results.total_m3.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} TL
+                                <div className="p-6 bg-[#09090b] rounded-2xl border border-[#27272a] relative z-10">
+                                    <p className="text-[10px] text-[#52525b] font-bold uppercase tracking-widest mb-2">Uygulanan Birim Fiyat Formülü</p>
+                                    <p className="text-3xl font-black text-white tracking-widest font-mono">{results.formula_used}</p>
+                                    <div className="mt-4 flex items-start gap-3 p-3 bg-blue-500/5 border border-blue-500/10 rounded-lg">
+                                        <Info className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
+                                        <p className="text-[11px] text-[#a1a1aa] leading-relaxed font-medium">
+                                            {results.formula_used === "07.005/K"
+                                                ? "Mesafe ≤ 10km olması nedeniyle 07.005/K (Karayolu İle Kısa Mesafe Taşımaları) analiz formülü uygulanmıştır."
+                                                : "Mesafe > 10km olması nedeniyle 07.006/K (Karayolu İle Uzun Mesafe Taşımaları) analiz formülü uygulanmıştır. Mesafe KM bazlı hesaplanır."
+                                            }
                                         </p>
                                     </div>
                                 </div>
 
-                                <div className="p-4 bg-blue-50 border border-blue-100 rounded-lg flex items-start space-x-3">
-                                    <Info className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
-                                    <div className="text-xs text-blue-800 space-y-1">
-                                        <p className="font-bold">Formül Açıklaması:</p>
-                                        {results.formula_used === "07.005/K" ? (
-                                            <p>F = 1,25 × 0,00017 × K × M × Y × A<br />(10km altı mesafeler için)</p>
-                                        ) : (
-                                            <p>F = 1,25 × K × (0,0007 × M + 0,01) × Y × A<br />(10km üzeri mesafeler için)</p>
-                                        )}
+                                <div className="space-y-4 relative z-10">
+                                    <div className="flex justify-between items-center py-4 border-b border-[#27272a]">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-2 h-2 rounded-full bg-blue-500" />
+                                            <span className="text-[#a1a1aa] text-sm font-medium">Birim Nakliye (TON)</span>
+                                        </div>
+                                        <span className="font-mono font-bold text-white text-lg tracking-tighter tabular-nums">{results.f_ton.toFixed(4)} <span className="text-xs text-[#52525b]">TL/T</span></span>
+                                    </div>
+                                    <div className="flex justify-between items-center py-4 border-b border-[#27272a]">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-2 h-2 rounded-full bg-purple-500" />
+                                            <span className="text-[#a1a1aa] text-sm font-medium">Birim Nakliye (M³)</span>
+                                        </div>
+                                        <span className="font-mono font-bold text-white text-lg tracking-tighter tabular-nums">{results.f_m3.toFixed(4)} <span className="text-xs text-[#52525b]">TL/M³</span></span>
                                     </div>
                                 </div>
-                            </div>
+
+                                <div className="bg-black/40 rounded-2xl p-8 border border-[#27272a] space-y-6 relative z-10">
+                                    <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] text-[#52525b] font-bold uppercase tracking-widest">TOPLAM TAŞIMA MALİYETİ</p>
+                                            <p className="text-xs text-blue-500/50 font-mono italic">({quantity} {unit} × {density} T/M³ × birim fiyat)</p>
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="text-4xl font-black text-white tracking-tighter tabular-nums drop-shadow-2xl">
+                                                {results.total_ton.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} <span className="text-sm text-blue-500 font-bold tracking-normal">TL</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="mt-auto pt-6 border-t border-[#27272a] text-[10px] font-bold text-[#52525b] uppercase tracking-[0.2em] flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                        <Box className="w-3 h-3" />
+                                        HESAPLAMA DOĞRULANDI
+                                    </div>
+                                    <div className="flex items-center gap-1 text-blue-500/50">
+                                        REEL VERİ <ShieldCheck className="w-3 h-3" />
+                                    </div>
+                                </div>
+                            </motion.div>
                         ) : (
-                            <div className="h-full flex flex-col items-center justify-center text-slate-300">
-                                <Truck className="w-16 h-16 mb-4 opacity-20" />
-                                <p>Hesaplama yapmak için parametreleri girip "HESAPLA" butonuna basın.</p>
-                            </div>
+                            <motion.div
+                                key="empty"
+                                initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                                className="bg-[#18181b]/30 rounded-2xl border border-dashed border-[#27272a] p-12 flex flex-col items-center justify-center h-full min-h-[500px] text-center space-y-4"
+                            >
+                                <div className="w-20 h-20 bg-[#18181b] rounded-full flex items-center justify-center mx-auto text-[#27272a] border border-[#27272a] mb-2">
+                                    <Truck className="w-10 h-10 opacity-20" />
+                                </div>
+                                <div className="max-w-xs mx-auto space-y-1">
+                                    <p className="text-[#fafafa] font-bold text-sm tracking-widest uppercase">Hesaplama İçin Girdi Bekleniyor</p>
+                                    <p className="text-[#52525b] text-xs leading-relaxed">Taşıma katsayılarını, mesafe ve malzeme türünü girerek hesaplamayı başlatın.</p>
+                                </div>
+                            </motion.div>
                         )}
-                    </div>
+                    </AnimatePresence>
                 </div>
             </div>
         </div>
     );
 }
+

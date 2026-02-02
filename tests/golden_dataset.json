@@ -1,0 +1,218 @@
+{
+    "version": "1.0",
+    "created_at": "2025-02-02",
+    "description": "AI Analiz Sistemi için Golden Test Dataset - Örnek Senaryolar",
+    "scenarios": [
+        {
+            "id": "simple_wall_001",
+            "category": "basit",
+            "description": "10 m² tuğla duvar örülmesi",
+            "expected_components": [
+                {
+                    "type": "Malzeme",
+                    "name": "Tuğla",
+                    "unit": "adet",
+                    "min_quantity": 200,
+                    "max_quantity": 300
+                },
+                {
+                    "type": "Malzeme",
+                    "name": "Harç",
+                    "unit": "m³",
+                    "min_quantity": 0.2,
+                    "max_quantity": 0.6
+                },
+                {
+                    "type": "İşçilik",
+                    "name": "Duvarcı",
+                    "unit": "Sa",
+                    "required": true
+                }
+            ],
+            "validation_rules": {
+                "must_have_mortar": true,
+                "must_have_labor": true,
+                "must_have_transport": false,
+                "price_range": {
+                    "min": 5000,
+                    "max": 20000
+                }
+            }
+        },
+        {
+            "id": "simple_concrete_001",
+            "category": "basit",
+            "description": "5 m³ C25/30 hazır beton dökümü",
+            "expected_components": [
+                {
+                    "type": "Malzeme",
+                    "name": "Beton",
+                    "unit": "m³",
+                    "min_quantity": 4.8,
+                    "max_quantity": 5.2
+                },
+                {
+                    "type": "Malzeme",
+                    "name": "Kalıp",
+                    "unit": "m²",
+                    "min_quantity": 25,
+                    "max_quantity": 40
+                },
+                {
+                    "type": "İşçilik",
+                    "name": "Betoncu",
+                    "unit": "Sa",
+                    "required": true
+                },
+                {
+                    "type": "Nakliye",
+                    "name": "Beton nakliye",
+                    "unit": "m³",
+                    "required": true
+                }
+            ],
+            "validation_rules": {
+                "must_have_mortar": false,
+                "must_have_labor": true,
+                "must_have_transport": true,
+                "price_range": {
+                    "min": 15000,
+                    "max": 40000
+                }
+            }
+        },
+        {
+            "id": "medium_reinforced_001",
+            "category": "orta",
+            "description": "20 m² betonarme döşeme yapımı (C30/37, ø14 demir)",
+            "expected_components": [
+                {
+                    "type": "Malzeme",
+                    "name": "Beton",
+                    "unit": "m³",
+                    "min_quantity": 2.5,
+                    "max_quantity": 4.5
+                },
+                {
+                    "type": "Malzeme",
+                    "name": "Demir",
+                    "unit": "ton",
+                    "min_quantity": 0.15,
+                    "max_quantity": 0.35
+                },
+                {
+                    "type": "Malzeme",
+                    "name": "Kalıp",
+                    "unit": "m²",
+                    "min_quantity": 18,
+                    "max_quantity": 30
+                },
+                {
+                    "type": "İşçilik",
+                    "name": "Demirci",
+                    "unit": "Sa",
+                    "required": true
+                },
+                {
+                    "type": "İşçilik",
+                    "name": "Kalıpçı",
+                    "unit": "Sa",
+                    "required": true
+                },
+                {
+                    "type": "İşçilik",
+                    "name": "Betoncu",
+                    "unit": "Sa",
+                    "required": true
+                }
+            ],
+            "validation_rules": {
+                "must_have_mortar": false,
+                "must_have_labor": true,
+                "must_have_transport": true,
+                "price_range": {
+                    "min": 25000,
+                    "max": 80000
+                }
+            }
+        },
+        {
+            "id": "simple_tile_001",
+            "category": "basit",
+            "description": "30 m² seramik kaplama",
+            "expected_components": [
+                {
+                    "type": "Malzeme",
+                    "name": "Seramik",
+                    "unit": "m²",
+                    "min_quantity": 30,
+                    "max_quantity": 35
+                },
+                {
+                    "type": "Malzeme",
+                    "name": "Yapıştırıcı",
+                    "unit": "kg",
+                    "min_quantity": 120,
+                    "max_quantity": 200
+                },
+                {
+                    "type": "Malzeme",
+                    "name": "Derz",
+                    "unit": "kg",
+                    "required": true
+                },
+                {
+                    "type": "İşçilik",
+                    "name": "Seramik",
+                    "unit": "Sa",
+                    "required": true
+                }
+            ],
+            "validation_rules": {
+                "must_have_mortar": false,
+                "must_have_labor": true,
+                "must_have_transport": false,
+                "price_range": {
+                    "min": 8000,
+                    "max": 30000
+                }
+            }
+        },
+        {
+            "id": "simple_excavation_001",
+            "category": "basit",
+            "description": "50 m³ temel kazısı",
+            "expected_components": [
+                {
+                    "type": "İşçilik",
+                    "name": "Kazı",
+                    "unit": "m³",
+                    "min_quantity": 45,
+                    "max_quantity": 55
+                },
+                {
+                    "type": "Nakliye",
+                    "name": "Toprak nakliye",
+                    "unit": "m³",
+                    "min_quantity": 45,
+                    "max_quantity": 60
+                },
+                {
+                    "type": "Makine",
+                    "name": "Ekskavatör",
+                    "unit": "Sa",
+                    "required": true
+                }
+            ],
+            "validation_rules": {
+                "must_have_mortar": false,
+                "must_have_labor": true,
+                "must_have_transport": true,
+                "price_range": {
+                    "min": 8000,
+                    "max": 25000
+                }
+            }
+        }
+    ]
+}

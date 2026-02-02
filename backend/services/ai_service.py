@@ -2,7 +2,21 @@ import json
 import requests
 import re
 import os
+import time
+import logging
 from typing import Dict, Any, Optional
+
+# Logger setup
+logger = logging.getLogger("ai_service")
+
+
+class APIError(Exception):
+    """Custom exception for API errors with details"""
+    def __init__(self, message: str, provider: str, status_code: int = None, retryable: bool = False):
+        super().__init__(message)
+        self.provider = provider
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 class AIAnalysisService:
@@ -18,8 +32,8 @@ class AIAnalysisService:
 
     def refine_feedback_description(self, text: str) -> str:
         """Kullanıcının girdiği düzeltme metnini profesyonel bir dile çevirir."""
-        prompt = f"""Bir inşaat mühendisi gibi davran. Aşağıdaki gayri resmi düzeltme açıklamasını, 
-gelecekteki analizlerde referans alınabilecek profesyonel, teknik ve net bir inşaat mühendisi 
+        prompt = f"""Bir inşaat mühendisi gibi davran. Aşağıdaki gayri resmi düzeltme açıklamasını,
+gelecekteki analizlerde referans alınabilecek profesyonel, teknik ve net bir inşaat mühendisi
 talimatına (düzeltme notuna) dönüştür.
 
 GİRİŞ: "{text}"
@@ -29,7 +43,7 @@ TALİMAT:
 - Net ve emir kipi/bilgi verici tonda ol.
 - Sadece düzeltilmiş metni yaz, başka hiçbir şey ekleme.
 """
-        
+
         # OpenRouter or Gemini
         messages = [
             {"role": "system", "content": "Sen uzman bir inşaat mühendisisin."},
@@ -68,33 +82,152 @@ TALİMAT:
 
         return text # Hata durumunda orijinali döndür
 
-    def generate_analysis(self, description: str, unit: str, context_data: str = "") -> Dict[str, Any]:
-        """Analiz oluşturma ana fonksiyonu"""
-        prompt = self._build_professional_prompt(description, unit, context_data)
+    def refine_construction_request(self, text: str) -> str:
+        """
+        Kullanıcının basit talebini profesyonel bir poz analiz talebine dönüştürür.
+        Örnek: "beton kanal" → "Beton trapeze kanal imalatı, C25/30 kaliteli hazır beton ile"
+        """
+        prompt = f"""Sen 20+ yıl deneyimli bir Yaklaşık Maliyet ve İhale Uzmanı İnşaat Mühendisisin.
+Kullanıcının basit ve gayri resmi inşaat talebini, DETAYLI ve TEKNİK bir poz analiz talebine dönüştür.
 
-        # Try OpenRouter first if key exists
+═══════════════════════════════════════════════════════════════
+KULLANICI TALEBİ: "{text}"
+═══════════════════════════════════════════════════════════════
+
+GÖREV:
+Bu talebi, Çevre ve Şehircilik Bakanlığı birim fiyat analizi formatına uygun,
+detaylı ve profesyonel bir poz tanımına dönüştür.
+
+KURALLAR:
+1. Teknik terimler kullan: imalat, metraj, rayiç, keşif, poz, birim fiyat
+2. Malzeme kalitelerini belirt (C25/30, S420, vb.)
+3. İmalat yöntemini netleştir (santral, elle, makine, vb.)
+4. Ölçü birimlerini tahmin et (m, m², m³, adet)
+5. Eksik detayları makul varsayımlarla tamamla
+
+ÖRNEKLER:
+❌ "beton kanal"
+✅ "Beton trapeze kanal imalatı (40x60 cm), C25/30 kaliteli hazır beton ile santral pompası kullanılarak döküm"
+
+❌ "duvar"
+✅ "20 cm kalınlığında yatay delikli tuğla duvar örülmesi, çimento harcı ile"
+
+❌ "kazı"
+✅ "Temel kazısı (her türlü zemin), ekskavatör ile 0-2 metre derinlik"
+
+❌ "santral beton"
+✅ "Hazır beton C25/30 kaliteli, beton santrali ile pompa ile sevk ve yerleştirilmesi"
+
+ÇIKTI:
+- SADECE dönüştürülmüş profesyonel metni yaz
+- Hiçbir açıklama veya ek yorum ekleme
+- Kısa, öz ve teknik ol (max 2 satır)
+"""
+
+        messages = [
+            {"role": "system", "content": "Sen Yaklaşık Maliyet ve İhale Uzmanı bir İnşaat Mühendisisin. Basit talepleri profesyonel poz tanımlarına dönüştürürsün."},
+            {"role": "user", "content": prompt}
+        ]
+
         if self.openrouter_key:
             try:
-                return self._call_openrouter(prompt)
+                headers = {
+                    "Authorization": f"Bearer {self.openrouter_key}",
+                    "Content-Type": "application/json"
+                }
+                data = {
+                    "model": self.model,
+                    "messages": messages,
+                    "temperature": 0.4
+                }
+                response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=30)
+                response.raise_for_status()
+                return response.json()['choices'][0]['message']['content'].strip()
             except Exception as e:
-                print(f"OpenRouter Error: {e}")
+                print(f"Refine Request Error (OpenRouter): {e}")
 
-        # Fallback to Gemini if key exists
         if self.gemini_key:
             try:
-                return self._call_gemini(prompt)
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
+                data = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.4}
+                }
+                response = requests.post(url, json=data, timeout=30)
+                response.raise_for_status()
+                return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             except Exception as e:
-                print(f"Gemini Error: {e}")
+                print(f"Refine Request Error (Gemini): {e}")
 
-        raise Exception("AI API anahtarı bulunamadı veya tüm servisler başarısız oldu.")
+        return text  # Hata durumunda orijinali döndür
+
+    def generate_analysis(self, description: str, unit: str, context_data: str = "") -> Dict[str, Any]:
+        """
+        Analiz oluşturma ana fonksiyonu.
+        Retry mekanizması ve fallback desteği ile.
+        """
+        prompt = self._build_professional_prompt(description, unit, context_data)
+        errors = []
+
+        # Try OpenRouter first if key exists (with retry)
+        if self.openrouter_key:
+            for attempt in range(3):
+                try:
+                    logger.info(f"OpenRouter API çağrısı (deneme {attempt + 1}/3)")
+                    return self._call_openrouter(prompt)
+                except APIError as e:
+                    errors.append(f"OpenRouter: {e}")
+                    if e.retryable and attempt < 2:
+                        wait_time = (attempt + 1) * 2  # 2, 4 saniye
+                        logger.warning(f"Retry beklemesi: {wait_time}s")
+                        time.sleep(wait_time)
+                        continue
+                    break
+                except Exception as e:
+                    errors.append(f"OpenRouter: {e}")
+                    logger.error(f"OpenRouter hatası: {e}")
+                    break
+
+        # Fallback to Gemini if key exists (with retry)
+        if self.gemini_key:
+            for attempt in range(2):
+                try:
+                    logger.info(f"Gemini API çağrısı (fallback, deneme {attempt + 1}/2)")
+                    return self._call_gemini(prompt)
+                except APIError as e:
+                    errors.append(f"Gemini: {e}")
+                    if e.retryable and attempt < 1:
+                        time.sleep(2)
+                        continue
+                    break
+                except Exception as e:
+                    errors.append(f"Gemini: {e}")
+                    logger.error(f"Gemini hatası: {e}")
+                    break
+
+        # All providers failed
+        error_summary = "; ".join(errors) if errors else "API anahtarı bulunamadı"
+        raise Exception(f"AI servisleri başarısız: {error_summary}")
 
     def _build_professional_prompt(self, description: str, unit: str, context_data: str) -> str:
         """
         Türkiye inşaat sektörüne özel, profesyonel ve detaylı prompt.
         2025 yılı Çevre ve Şehircilik Bakanlığı normlarına uygun.
         """
-        return f"""Sen Türkiye'de 20+ yıl deneyimli bir İnşaat Metraj ve Hakediş Mühendisisin.
-Çevre ve Şehircilik Bakanlığı birim fiyat analiz formatlarına hakimsin.
+        return f"""Sen Türkiye'de 20+ yıl deneyimli bir YAKLAŞIK MALİYET ve İHALE UZMANI İnşaat Mühendisisin.
+
+UZMANLIKLARIN:
+• Çevre ve Şehircilik Bakanlığı birim fiyat analiz formatları
+• İhale dosyası hazırlama ve keşif metrajı düzenleme
+• Piyasa rayiç fiyatları ve maliyet optimizasyonu
+• Teknik şartname ve poz analizi oluşturma
+• Kamu İhale Kanunu ve ÇŞB standartları
+
+SEN BİR İHALE UZMANISIN, bu nedenle:
+✓ Fiyatlar gerçekçi ve piyasa rayiçlerine uygun olmalı
+✓ Her poz detaylı ve ihale dosyasına eklemeye hazır olmalı
+✓ Malzeme kaliteleri ve normlar açıkça belirtilmeli
+✓ Hesaplamalar ÇŞB standartlarına uygun olmalı
 
 ═══════════════════════════════════════════════════════════════
                         GÖREV
@@ -103,7 +236,7 @@ TALİMAT:
 Aşağıdaki poz tanımı için detaylı birim fiyat analizi oluştur:
 
 📌 POZ TANIMI: {description}
-📌 BİRİM: {unit}
+📌 BİRİM (REFERANS): {unit} (Bu sadece referanstır, sen imalat türüne göre EN UYGUN birimi belirle!)
 
 ═══════════════════════════════════════════════════════════════
                    MEVCUT VERİTABANI BİLGİLERİ
@@ -111,11 +244,111 @@ Aşağıdaki poz tanımı için detaylı birim fiyat analizi oluştur:
 
 {context_data if context_data else "Veritabanında benzer poz bulunamadı. Genel bilgilerini kullan."}
 
+⚠️ ÖNEMLİ: Yukarıdaki pozlar SEMANTİK ETİKET SİSTEMİ ile filtrelenmiştir.
+Eğer "🏷️ ARANAN ÖZELLİKLER" kısmı varsa, o etiketlere uygun pozları kullan!
+Örnek: "hazir_beton" etiketi varsa → 15.150.xxxx kodlu HAZIR BETON pozlarını kullan
+Örnek: "beton_harci" etiketi varsa → Çimento + Kum + Çakıl karışımı kullan
+
 ═══════════════════════════════════════════════════════════════
                         KURALLAR
 ═══════════════════════════════════════════════════════════════
 
-⚠️ KRİTİK UYARI - BETON VE BETONARME FARKI:
+⚠️ KRİTİK UYARI 1 - BİRİM BELİRLEME:
+
+🎯 İMALAT TÜRÜNE GÖRE DOĞRU BİRİMİ OTOMATIK BELİRLE:
+
+📏 UZUNLUK İMALATLARI (m):
+   • Boru döşeme, kanal imalatı, hendek kazısı
+   • Boru (her türlü), kanal, mazgal, yol şeridi
+   • Hat boyunca devam eden işler
+   • Örnek: "Beton trapeze kanal imalatı" → m
+   • Örnek: "PVC boru döşeme" → m
+   • Örnek: "Bordür taşı döşeme" → m
+
+📐 ALAN İMALATLARI (m²):
+   • Duvar, döşeme (düz), çatı, kaplama, sıva, boya
+   • Yüzey işleri, kaplama işleri
+   • Örnek: "20 cm gazbeton duvar" → m²
+   • Örnek: "Seramik kaplama" → m²
+   • Örnek: "Sıva işleri" → m²
+
+📦 HACİM İMALATLARI (m³):
+   • Kazı, dolgu, moloz, beton (hacim olarak)
+   • Hacim hesabı gerektiren işler
+   • Örnek: "Temel kazısı" → m³
+   • Örnek: "Kum dolgu" → m³
+   • Örnek: "Beton dolgu" → m³
+
+🔢 ADET/TON/KG İMALATLARI:
+   • Prefabrik elemanlar → adet
+   • Demir/çelik malzeme → ton veya kg
+   • Kapı, pencere, cihaz → adet
+   • Örnek: "Prefabrik direk" → adet
+   • Örnek: "Nervürlü demir" → ton
+
+⚠️ DİKKAT: Yukarıdaki referans birim "{unit}" ise GÖRMEZDEN GEL!
+İmalat türüne göre EN UYGUN birimi "suggested_unit" alanına yaz!
+
+═══════════════════════════════════════════════════════════════
+
+⚠️ KRİTİK UYARI 2 - BETON SANTRALI vs BETON HARCI:
+
+🏭 BETON SANTRALI İLE GETİRİLEN BETON (HAZIR BETON):
+   • Anahtar kelimeler: "santral", "santrali ile", "santralde hazır", "pompa ile"
+   • Malzeme: 15.150.xxxx kodlu HAZIR BETON (örn: C25/30 hazır beton)
+   • Birim: m³
+   • İşçilik: Sadece DÖKME işçiliği (karıştırma yok!)
+   • Örnek: "Beton santrali ile dökülen C25 beton" → 15.150.1005 Hazır Beton C25/30
+
+🧱 ŞANTİYEDE KARILAN BETON HARCI (GELENEKSEL):
+   • Anahtar kelimeler: "harcı", "karışım", "elle", "şantiyede"
+   • Malzemeler: Çimento + Kum + Çakıl + Su (AYRI AYRI!)
+   • İşçilik: Karıştırma + Dökme
+   • Örnek: "Beton harcı" → Çimento 10.130.1202 + Kum + Çakıl
+
+⚠️ DİKKAT: "Beton santrali" ifadesi görürsen ASLA çimento+kum+çakıl yazma!
+Sadece HAZIR BETON poz numarasını kullan!
+
+⚠️ ASLA HAZIR BETON + ÇİMENTO/KUM/ÇAKIL BIRLIKTE OLMASIN!
+Bu mantıken yanlış! Hazır beton zaten karıştırılmış gelir.
+
+═══════════════════════════════════════════════════════════════
+
+⚠️ KRİTİK UYARI 2.5 - GROBETON (AYRI MALZEME!):
+
+🔷 GROBETON NEDİR?
+   • Düşük kaliteli beton (genelde C15/20 veya C20/25)
+   • Temel altı, taban dolgu, dolgu işleri için kullanılır
+   • ANA BETON'DAN AYRI BİR MALZEMEDIR!
+
+🔷 GROBETON NASIL EKLENİR?
+   Eğer kullanıcı "grobeton", "taban betonu", "dolgu betonu" diyorsa:
+
+   → AYRI bir malzeme kalemi olarak ekle:
+
+   MALZEME:
+   1. C30/37 Hazır Beton (Ana yapı için) - X m³
+   2. C15/20 Grobeton (Taban dolgu için) - Y m³  ← AYRI KALEM!
+
+   NAKLİYE:
+   1. C30/37 Beton nakliyesi
+   2. Grobeton nakliyesi  ← AYRI NAKLİYE!
+
+🔷 ÖRNEK (YANLIŞ vs DOĞRU):
+
+❌ YANLIŞ:
+   • C30/37 Hazır Beton: 1.0 m³
+   • Grobeton nakliyesi: 0.25 m³  (Malzeme yok, sadece nakliye!)
+
+✅ DOĞRU:
+   • C30/37 Hazır Beton: 1.0 m³
+   • C15/20 Grobeton: 0.25 m³  (AYRI MALZEME!)
+   • C30/37 Beton nakliyesi: 1.0 m³
+   • Grobeton nakliyesi: 0.25 m³
+
+═══════════════════════════════════════════════════════════════
+
+⚠️ KRİTİK UYARI 3 - BETON VE BETONARME FARKI:
 
 🔴 EĞER POZ AÇIKLAMASINDA "BETON" YAZIYORSA VE "BETONARME/DONATILI/DEMİR" YAZMIYORSA:
    → Bu DONATISIZ BETON'dur (Yalın beton, düz beton)
@@ -163,24 +396,68 @@ Aşağıdaki poz tanımı için detaylı birim fiyat analizi oluştur:
    ⚠️ ASLA 01.xxx, 04.xxx, 07.005 gibi kodları KULLANMA!
    ⚠️ Bu kodlar veritabanında YOK!
 
-2. MİKTAR HESAPLAMA (1 {unit} için):
-   • Malzeme fire payı: %3-5 ekle
-   • İşçilik verimsizlik payı: %10 ekle
-   • Standart işçilik normları kullan:
-     - Duvar örme: 0.8-1.2 sa/m²
-     - Beton dökme: 1.5-2.0 sa/m³
-     - Sıva: 0.6-0.8 sa/m²
-     - Demir işçiliği: 8-12 sa/ton
+2. MİKTAR HESAPLAMA (1 {unit} için) - KİK STANDARTLARI:
 
-3. NAKLİYE HESABI (varsayılan 20 km):
-   • Her malzeme için nakliye kalemi ekle
+   ⚠️ KRİTİK: Miktarlar RASTGELE yazılamaz! Resmî analizler ve ÇŞB normları esas alınmalıdır.
+
+   📌 MALZEME FİRE ORANLARI (4734 sayılı KİK kabul gören değerler):
+     • Demir/Çelik: %3-5 fire
+     • Beton: %1-2 fire
+     • Kalıp: %5-10 fire (yıpranma)
+     • Tuğla/Blok: %3-5 fire
+     • Çimento: %2-3 fire
+     • Agregalar: %3-5 fire
+
+   📌 İŞÇİLİK SÜRELERİ (adam/saat veya adam/gün formatında):
+     ⚠️ Bu süreler KİK resmî analizlerinden alınmıştır, keyfi değildir!
+     • Duvar örme: 0.8-1.2 adam/saat per m²
+     • Beton dökme: 1.5-2.0 adam/saat per m³
+     • Sıva işleri: 0.6-0.8 adam/saat per m²
+     • Demir işçiliği: 8-12 adam/saat per ton
+     • Kazı (elle): 0.4-0.6 adam/saat per m³
+     • Kalıp yapma: 1.5-2.5 adam/saat per m²
+
+   📌 MAKİNE SÜRELERİ VE KAPASİTELER:
+     • Beton pompası: 30-40 m³/saat kapasiteli → 1 m³ için 0.025-0.033 saat
+     • Ekskavatör (kazı): 40-60 m³/saat → 1 m³ için 0.017-0.025 saat
+     • Betoniyer: 0.5-1.0 m³/saat → 1 m³ için 1.0-2.0 saat
+     • Vibratör: Genelde işçilik içinde, ayrıca yazılmaz
+
+   ⚠️ EMSAL POZ KULLANIMI:
+     • Yukarıda veritabanından gelen pozlar EMSAL POZ'dur
+     • Özel poz yazıyorsan mutlaka benzer emsal poza referans ver
+     • Miktarları emsal pozdan uyarla, sıfırdan uydurma!
+
+3. NAKLİYE HESABI (4734 KİK - varsayılan 20 km):
+   • Her malzeme için nakliye kalemi ZORUNLU
+   • Nakliye mesafesi: 20 km (varsayılan)
    • Birim: ton veya m³
-   • Yoğunluklar: Beton=2.4 t/m³, Kum=1.6 t/m³, Demir=7.85 t/m³, Taş=2.5 t/m³
+   • Yoğunluklar (standart değerler):
+     - Beton: 2.4 t/m³
+     - Kum: 1.6 t/m³
+     - Çakıl: 1.8 t/m³
+     - Demir: 7.85 t/m³
+     - Taş: 2.5 t/m³
+     - Tuğla: 1.4 t/m³
 
-4. FİYATLAR:
-   • Eğer yukarıda veritabanı fiyatları verilmişse, ONLARI KULLAN
-   • Verilmemişse 2025 yılı piyasa rayiçlerini tahmin et
+4. FİYATLAR (İHALE UZMANI YAKLAŞIMI - 4734 KİK):
+   • ✅ ÖNCE: Yukarıdaki veritabanı fiyatlarını KULLAN (ÇŞB resmî rayiçleri)
+   • ⚠️ Veritabanında yoksa: 2025 yılı piyasa ortalaması tahmin et
+   • Fiyatlar GERÇEKÇI ve İHALE DOSYASINDAKİ KALİTEDE olmalı
    • Fiyatlar TL cinsinden, virgülsüz yaz (örn: 125.50)
+   • ❌ Çok düşük fiyat → Aşırı düşük sorgulamasında elenme sebebi!
+   • ❌ Çok yüksek fiyat → İhale kayıp!
+
+   📌 GENEL GİDER + KÂR:
+     • %25 (Yüklenici kârı + genel giderler)
+     • ⚠️ ASLA ayrı satır olarak yazma!
+     • Birim fiyatlara yedirilmiş kabul edilir (explanation'da belirt)
+
+5. İHALE DOSYASI UYGUNLUĞU:
+   • Her poz açıklaması net ve teknik olmalı
+   • Malzeme kaliteleri belirtilmeli (C25/30, S420 vb.)
+   • İmalat yöntemi netleştirilmeli (santral, elle, makine vb.)
+   • Ölçü birimleri doğru seçilmeli
 
 ═══════════════════════════════════════════════════════════════
                       ÇIKTI FORMATI
@@ -189,35 +466,70 @@ Aşağıdaki poz tanımı için detaylı birim fiyat analizi oluştur:
 SADECE aşağıdaki JSON formatında yanıt ver, başka hiçbir şey yazma:
 
 {{
-  "suggested_unit": "m2/m3/adet/ton/kg - Bu poz için EN UYGUN birim",
-  "explanation": "Bu analiz [kısa açıklama]. Malzeme miktarları [norm/kaynak] esas alınarak, işçilik süreleri [norm] baz alınarak hesaplanmıştır. Nakliye 20 km mesafe için eklenmiştir.",
+  "suggested_unit": "İMALAT TÜRÜNE GÖRE BELİRLEDİĞİN BİRİM (m/m²/m³/adet/ton/kg)",
+  "explanation": "Bu poz analizi 4734 sayılı Kamu İhale Kanunu ve Çevre Şehircilik Bakanlığı 2025 yılı standartlarına uygun olarak hazırlanmıştır.
+
+📋 DAYANAK NORMLAR:
+• Malzeme miktarları: [ÇŞB/DSİ/Karayolları] birim fiyat analizleri esas alınmıştır
+• İşçilik süreleri: Resmî işçilik normları (adam/saat) kullanılmıştır
+• Fire oranları: KİK kabul gören standart değerler uygulanmıştır (Demir %3-5, Beton %1-2, Kalıp %5-10)
+• Birim fiyatlar: 2025 yılı ÇŞB veritabanı fiyatları ve piyasa rayiçleri baz alınmıştır
+• Nakliye mesafesi: 20 km kabul edilmiştir
+
+⚠️ ÖZEL NOTLAR:
+• Genel gider ve yüklenici kârı (%25) birim fiyatlara yedirilmiştir
+• Bu analiz ihale dosyalarında kullanıma uygun formattadır
+• Emsal poz referansları veritabanından alınmıştır",
   "components": [
     {{
       "type": "Malzeme",
       "code": "10.130.1202",
-      "name": "Malzeme adı (kalite/özellik)",
-      "unit": "kg/m³/adet/ton",
-      "quantity": 0.0000,
-      "unit_price": 0.00
+      "name": "Portland Çimentosu CEM I 42.5 R (%3 fire dahil)",
+      "unit": "ton",
+      "quantity": 0.3090,
+      "unit_price": 4250.00
+    }},
+    {{
+      "type": "Malzeme",
+      "code": "10.130.1004",
+      "name": "İnce agrega (kum) 0-5 mm (%5 fire dahil)",
+      "unit": "m³",
+      "quantity": 0.4725,
+      "unit_price": 350.00
     }},
     {{
       "type": "İşçilik",
-      "code": "10.100.1013",
-      "name": "İşçilik adı",
+      "code": "10.100.1015",
+      "name": "Betoncu ustası (1.5 adam/saat)",
       "unit": "sa",
-      "quantity": 0.0000,
-      "unit_price": 0.00
+      "quantity": 1.5000,
+      "unit_price": 185.50
+    }},
+    {{
+      "type": "İşçilik",
+      "code": "10.100.1045",
+      "name": "Betoncu yardımcısı (2.0 adam/saat)",
+      "unit": "sa",
+      "quantity": 2.0000,
+      "unit_price": 165.00
     }},
     {{
       "type": "Nakliye",
       "code": "15.100.1001",
-      "name": "Malzeme nakliyesi (20 km)",
+      "name": "Çimento nakliyesi 20 km (0.31 ton × 2.4 t/m³)",
       "unit": "ton",
-      "quantity": 0.0000,
-      "unit_price": 0.00
+      "quantity": 0.7440,
+      "unit_price": 25.00
     }}
   ]
 }}
+
+⚠️ ÖNEMLİ KURALLAR:
+1. Malzeme name alanında FİRE ORANINI belirt: "(%3 fire dahil)"
+2. İşçilik name alanında ADAM/SAAT süresini belirt: "(1.5 adam/saat)"
+3. Nakliye name alanında HESAPLAMA DETAYlarını belirt: "(0.31 ton × 2.4)"
+4. Quantity değerleri REALİSTİK olmalı, emsal pozlardan uyarla
+5. Her component name NET ve TEKNİK olmalı (ihale dosyasında kullanılacak)
 
 ÖNEMLİ:
 • Her malzeme için ayrı nakliye kalemi ekle
@@ -237,17 +549,41 @@ SADECE aşağıdaki JSON formatında yanıt ver, başka hiçbir şey yazma:
             "messages": [
                 {
                     "role": "system",
-                    "content": "Sen Türkiye'de çalışan uzman bir inşaat metraj mühendisisin. Sadece JSON formatında yanıt verirsin."
+                    "content": "Sen Türkiye'de çalışan Yaklaşık Maliyet ve İhale Uzmanı bir İnşaat Mühendisisin. 4734 sayılı Kamu İhale Kanunu, ÇŞB/DSİ/Karayolları birim fiyat analizleri ve resmî işçilik normlarına hâkimsin. İhale dosyaları hazırlama konusunda 20+ yıl deneyime sahipsin. Poz analizleri oluştururken:\n\n• Malzeme miktarlarını ÇŞB resmî analizlerinden alırsın\n• Fire oranlarını KİK kabul gören değerlerde uygularsın (Demir %3-5, Beton %1-2, Kalıp %5-10)\n• İşçilik sürelerini adam/saat formatında ve resmî normlara uygun yazarsın\n• Makine kapasitelerini ve sürelerini gerçekçi hesaplarsın\n• Emsal poz referanslarını mutlaka kullanırsın\n• Nakliye mesafesini 20 km kabul edersin\n• Genel gider + kâr (%25) birim fiyatlara yedirilmiştir, ayrı satır yazmassın\n\nSadece JSON formatında, aşırı düşük sorgulamasında geçebilecek kalitede, gerçekçi ve piyasa rayiçlerine uygun analiz yanıtları verirsin."
                 },
                 {
                     "role": "user",
                     "content": prompt
                 }
             ],
-            "temperature": 0.1,  # Daha tutarlı sonuçlar için düşürüldü
+            "temperature": 0.1,
             "max_tokens": 4000
         }
-        response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=90)
+
+        try:
+            response = requests.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=90
+            )
+        except requests.exceptions.Timeout:
+            raise APIError("İstek zaman aşımına uğradı (90s)", "OpenRouter", retryable=True)
+        except requests.exceptions.ConnectionError:
+            raise APIError("Bağlantı hatası", "OpenRouter", retryable=True)
+
+        # Handle HTTP errors
+        if response.status_code == 429:
+            raise APIError("Rate limit aşıldı", "OpenRouter", 429, retryable=True)
+        elif response.status_code == 401:
+            raise APIError("API anahtarı geçersiz", "OpenRouter", 401, retryable=False)
+        elif response.status_code == 503:
+            raise APIError("Servis geçici olarak kullanılamıyor", "OpenRouter", 503, retryable=True)
+        elif response.status_code >= 500:
+            raise APIError(f"Sunucu hatası ({response.status_code})", "OpenRouter", response.status_code, retryable=True)
+        elif response.status_code >= 400:
+            raise APIError(f"İstek hatası ({response.status_code})", "OpenRouter", response.status_code, retryable=False)
+
         response.raise_for_status()
         content = response.json()['choices'][0]['message']['content']
         return self._process_response(content)
@@ -262,7 +598,26 @@ SADECE aşağıdaki JSON formatında yanıt ver, başka hiçbir şey yazma:
                 "maxOutputTokens": 4000
             }
         }
-        response = requests.post(url, json=data, timeout=90)
+
+        try:
+            response = requests.post(url, json=data, timeout=120)
+        except requests.exceptions.Timeout:
+            raise APIError("İstek zaman aşımına uğradı (120s)", "Gemini", retryable=True)
+        except requests.exceptions.ConnectionError:
+            raise APIError("Bağlantı hatası", "Gemini", retryable=True)
+
+        # Handle HTTP errors
+        if response.status_code == 429:
+            raise APIError("Rate limit aşıldı", "Gemini", 429, retryable=True)
+        elif response.status_code == 401 or response.status_code == 403:
+            raise APIError("API anahtarı geçersiz veya yetkisiz", "Gemini", response.status_code, retryable=False)
+        elif response.status_code == 503:
+            raise APIError("Servis geçici olarak kullanılamıyor", "Gemini", 503, retryable=True)
+        elif response.status_code >= 500:
+            raise APIError(f"Sunucu hatası ({response.status_code})", "Gemini", response.status_code, retryable=True)
+        elif response.status_code >= 400:
+            raise APIError(f"İstek hatası ({response.status_code})", "Gemini", response.status_code, retryable=False)
+
         response.raise_for_status()
         content = response.json()['candidates'][0]['content']['parts'][0]['text']
         return self._process_response(content)
@@ -274,24 +629,43 @@ SADECE aşağıdaki JSON formatında yanıt ver, başka hiçbir şey yazma:
 
         # Önce doğrudan parse etmeyi dene
         try:
-            return self._finalize_data(json.loads(content))
+            return self._finalize_data(json.loads(content, strict=False))
         except json.JSONDecodeError:
             pass
 
         # JSON'ı metin içinden ayıkla (en dıştaki { })
         match = re.search(r'(\{[\s\S]*\})', content)
         if match:
+            json_str = match.group(1)
+
+            # Geçersiz kontrol karakterlerini temizle
+            json_str = self._clean_control_characters(json_str)
+
             try:
-                return self._finalize_data(json.loads(match.group(1)))
+                return self._finalize_data(json.loads(json_str, strict=False))
             except json.JSONDecodeError as e:
                 # JSON onarma dene
-                repaired = self._repair_json(match.group(1))
+                repaired = self._repair_json(json_str)
                 try:
-                    return self._finalize_data(json.loads(repaired))
+                    return self._finalize_data(json.loads(repaired, strict=False))
                 except:
                     raise Exception(f"AI yanıtı geçerli JSON'a dönüştürülemedi: {str(e)}")
 
         raise Exception(f"AI yanıtında JSON bulunamadı: {content[:200]}...")
+
+    def _clean_control_characters(self, json_str: str) -> str:
+        """JSON string içindeki geçersiz kontrol karakterlerini temizle"""
+        # ASCII control characters (0-31) hariç \t, \n, \r
+        # Bu karakterleri boşluk ile değiştir
+        cleaned = ''
+        for char in json_str:
+            code = ord(char)
+            # 0-31 arasındaki kontrol karakterleri, ama \t(9), \n(10), \r(13) hariç
+            if 0 <= code < 32 and code not in (9, 10, 13):
+                cleaned += ' '  # Geçersiz karakteri boşlukla değiştir
+            else:
+                cleaned += char
+        return cleaned
 
     def _repair_json(self, json_str: str) -> str:
         """Bozuk JSON'ı onarmaya çalış"""

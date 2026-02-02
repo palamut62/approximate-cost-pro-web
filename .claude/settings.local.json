@@ -6,7 +6,19 @@
       "Bash(python3:*)",
       "Bash(PYTHONPATH=/home/aras/Masaüstü/UYGULAMALARIM/approximate_cost python3:*)",
       "Bash(ls:*)",
-      "Bash(PYTHONPATH=. python3:*)"
+      "Bash(PYTHONPATH=. python3:*)",
+      "Bash(python backend/main.py:*)",
+      "Bash(python -m uvicorn:*)",
+      "Bash(pkill:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(curl:*)",
+      "Bash(lsof:*)",
+      "Read(//home/aras/Masaüstü/UYGULAMALARIM/approximate_cost/backend/**)",
+      "Bash(xargs kill:*)",
+      "Bash(netstat:*)",
+      "Bash(top:*)",
+      "Bash(kill:*)",
+      "Bash(head:*)"
     ]
   }
 }

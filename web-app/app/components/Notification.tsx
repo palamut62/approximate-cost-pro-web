@@ -10,33 +10,34 @@ export default function Notification() {
 
     return (
         <>
-            {/* Toasts */}
-            <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-3 max-w-md w-full sm:w-[400px]">
+            {/* Toasts - Bottom Right, Dark Theme, Glassmorphism */}
+            <div className="fixed bottom-4 right-4 z-[9999] flex flex-col-reverse gap-3 max-w-md w-full sm:w-[400px]">
                 {notifications.map((n) => (
                     <div
                         key={n.id}
                         className={cn(
-                            "animate-in slide-in-from-right-full duration-300 p-4 rounded-xl shadow-lg border flex items-start gap-3 bg-white",
-                            n.type === 'success' ? "border-green-100 bg-green-50/50" :
-                                n.type === 'error' ? "border-red-100 bg-red-50/50" :
-                                    n.type === 'warning' ? "border-amber-100 bg-amber-50/50" :
-                                        "border-blue-100 bg-blue-50/50"
+                            "animate-in slide-in-from-right-full duration-300 p-4 rounded-xl shadow-2xl border flex items-start gap-3",
+                            "backdrop-blur-xl bg-[#18181b]/80",
+                            n.type === 'success' ? "border-green-500/30" :
+                                n.type === 'error' ? "border-red-500/30" :
+                                    n.type === 'warning' ? "border-amber-500/30" :
+                                        "border-blue-500/30"
                         )}
                     >
                         <div className="flex-shrink-0 mt-0.5">
-                            {n.type === 'success' && <CheckCircle2 className="w-5 h-5 text-green-600" />}
-                            {n.type === 'error' && <AlertCircle className="w-5 h-5 text-red-600" />}
-                            {n.type === 'warning' && <AlertTriangle className="w-5 h-5 text-amber-600" />}
-                            {n.type === 'info' && <Info className="w-5 h-5 text-blue-600" />}
+                            {n.type === 'success' && <CheckCircle2 className="w-5 h-5 text-green-400" />}
+                            {n.type === 'error' && <AlertCircle className="w-5 h-5 text-red-400" />}
+                            {n.type === 'warning' && <AlertTriangle className="w-5 h-5 text-amber-400" />}
+                            {n.type === 'info' && <Info className="w-5 h-5 text-blue-400" />}
                         </div>
 
                         <div className="flex-grow">
                             <p className={cn(
                                 "text-sm font-medium",
-                                n.type === 'success' ? "text-green-800" :
-                                    n.type === 'error' ? "text-red-800" :
-                                        n.type === 'warning' ? "text-amber-800" :
-                                            "text-blue-800"
+                                n.type === 'success' ? "text-green-300" :
+                                    n.type === 'error' ? "text-red-300" :
+                                        n.type === 'warning' ? "text-amber-300" :
+                                            "text-blue-300"
                             )}>
                                 {n.message}
                             </p>
@@ -44,7 +45,7 @@ export default function Notification() {
 
                         <button
                             onClick={() => removeNotification(n.id)}
-                            className="flex-shrink-0 text-slate-400 hover:text-slate-600 transition-colors"
+                            className="flex-shrink-0 text-[#71717a] hover:text-[#fafafa] transition-colors"
                         >
                             <X className="w-4 h-4" />
                         </button>

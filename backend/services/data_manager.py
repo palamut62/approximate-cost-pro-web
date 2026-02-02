@@ -14,7 +14,11 @@ class CSVDataManager:
     """PDF klasöründeki CSV dosyalarından pozları yönetir"""
 
     def __init__(self):
-        self.csv_folder = Path(__file__).parent.parent / "PDF"
+        # Path pointing to approximate_cost/ANALIZ
+        self.csv_folder = Path(__file__).parent.parent.parent / "ANALIZ"
+        if not self.csv_folder.exists():
+            # Fallback to backend/PDF just in case
+             self.csv_folder = Path(__file__).parent.parent / "PDF"
         self.poz_data = {}  # Poz No -> Poz Verisi
         # self.load_csv_files() # Blocking call removed
 
@@ -461,11 +465,11 @@ class CSVLoader:
         self.csv_folder = csv_folder
         self._stop_requested = False
         self.cache_dir = Path(__file__).parent / "cache"
-        self.cache_file = self.cache_dir / "poz_data_cache.json"
-        self.csv_folder = csv_folder
-        self._stop_requested = False
-        self.cache_dir = Path(__file__).parent / "cache"
-        self.cache_file = self.cache_dir / "poz_data_cache.json"
+        
+        # Unique cache file per folder to avoid collisions
+        folder_name = csv_folder.name if hasattr(csv_folder, 'name') else 'default'
+        folder_hash = hashlib.md5(str(csv_folder).encode()).hexdigest()[:8]
+        self.cache_file = self.cache_dir / f"poz_data_cache_{folder_name}_{folder_hash}.json"
 
     def stop(self):
         self._stop_requested = True
@@ -736,12 +740,82 @@ class CSVLoader:
                             poz_no = match.group(1)
                             break
 
-                    if poz_no and poz_no not in poz_data:
-                        # Açıklama, birim ve fiyatı belirle
-                        # KGM formatında bunlar genellikle alt satırlarda olur.
-                        # ÇŞB formatında ise aynı satırda olur.
+                            break
+
+                    if poz_no:
+                        # Existing poz check with "Better Description" strategy
+                        if poz_no in poz_data:
+                            existing_desc = poz_data[poz_no].get('description', '')
+                            # If we are about to parse a line, we don't know the description yet.
+                            # We must parse it first, THEN decide to update.
+                            pass
                         
-                        description = ""
+                        # ÇŞB formatında ise aynı satırda veya alt satırda olur.
+                        
+                        description_lines = []
+                        unit = ""
+                        unit_price = "0,00"
+                        
+                        # Pozun olduğu satırdan kalan kısmı al
+                        try:
+                            start_idx = line.find(poz_no)
+                            if start_idx != -1:
+                                same_line_remaining = line[start_idx + len(poz_no):].strip()
+                            else:
+                                same_line_remaining = line.replace(poz_no, "").strip()
+                        except:
+                            same_line_remaining = line.replace(poz_no, "").strip()
+                            
+                        # Eğer kalan kısımda "Analizin Adı" gibi başlıklar varsa temizle
+                        same_line_remaining = re.sub(r'Analizin Adı', '', same_line_remaining, flags=re.IGNORECASE).strip()
+                        
+                        if same_line_remaining:
+                             description_lines.append(same_line_remaining)
+
+                        # Alt satırları tara (ÇŞB'de açıklama alt satırlara iner)
+                        current_idx = rows.index(line)
+                        price_found = False
+                        
+                        # Sonraki 15 satıra bak
+                        for k in range(1, 15):
+                            if current_idx + k >= len(rows):
+                                break
+                            
+                            next_line = rows[current_idx + k].strip()
+                            
+                            # Yeni bir poz no başladıysa dur
+                            is_new_poz = False
+                            for pat in poz_patterns:
+                                if re.search(pat, next_line):
+                                    is_new_poz = True
+                                    break
+                            if is_new_poz:
+                                break
+                            
+                            # Tanımı, Ölçü Birimi gibi başlıkları atla/durdur
+                            if "Tanımı" in next_line or "Ölçü Birimi" in next_line and len(next_line) < 20:
+                                continue
+                                
+                            # Fiyat satırı mı?
+                            price_match = re.search(r'(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)\s*(?:TL|₺|$)', next_line)
+                            # ÇŞB analizlerinde fiyat satırı altında "Malzeme:" yazar, oraya gelmeden fiyatı buluruz.
+                            if "Malzeme:" in next_line or "İşçilik:" in next_line:
+                                # Analiz detayına girdik, açıklamayı bitir.
+                                break
+                                
+                            # Bu satır açıklamanın devamı mı?
+                            # "(Nakliye dahil)" gibi kritik bilgiler burada olabilir.
+                            description_lines.append(next_line)
+                            
+                        full_description = " ".join(description_lines)
+                        
+                        # Temizlik
+                        # Fiyatı ve gereksiz headerları temizle
+                        clean_desc = full_description
+                        # ... cleaning logic can be added here if needed
+                        
+                        description = clean_desc
+
                         unit = ""
                         unit_price = "0,00"
                         
@@ -848,17 +922,30 @@ class CSVLoader:
                         elif poz_no.startswith('İLLER'):
                              institution = 'İLLER'
 
-                        poz_info = {
-                            'poz_no': poz_no,
-                            'description': description[:300] if description else f"Poz: {poz_no}",
-                            'unit': unit,
-                            'quantity': '',
-                            'institution': institution,
-                            'unit_price': unit_price,
-                            'source_file': pdf_path.name
-                        }
-
-                        poz_data[poz_no] = poz_info
+                        # Karar verme: Güncelle veya Atla
+                        should_update = True
+                        if poz_no in poz_data:
+                            old_desc = poz_data[poz_no].get('description', '')
+                            # Eğer yeni açıklama çok daha uzunsa (Main Definition ise) güncelle
+                            if len(description) > len(old_desc) + 20:
+                                should_update = True
+                            # Eğer mevcut açıklama zaten uzunsa (Definition ise) ve yeni gelen kısaysa (Reference), güncelleme
+                            elif len(old_desc) > len(description) + 20:
+                                should_update = False
+                            # Benzer uzunlukta? İlk gelen kalsın (First match wins for similar)
+                            else:
+                                should_update = False
+                                
+                        if should_update:
+                             poz_info = {
+                                 'poz_no': poz_no,
+                                 'description': description,
+                                 'unit': unit,
+                                 'unit_price': unit_price,
+                                 'institution': institution, # Use the determined institution
+                                 'source_file': pdf_path.name
+                             }
+                             poz_data[poz_no] = poz_info
                         poz_count += 1
 
             doc.close()
