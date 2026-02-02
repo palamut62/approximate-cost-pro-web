@@ -29,10 +29,9 @@ wheels/
 venv/
 env/
 ENV/
+.venv/
 
 # PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
 
@@ -81,7 +80,6 @@ celerybeat-schedule
 
 # Environments
 .env
-.venv
 env/
 venv/
 ENV/
@@ -92,20 +90,41 @@ venv.bak/
 .vscode/
 .idea/
 
-# Project Specific
-# ----------------
+# ========================================
+# Project Specific - Large Files
+# ========================================
+
+# Node modules (very large)
+web-app/node_modules/
+node_modules/
+
+# Next.js build cache (can be 100+ MB)
+web-app/.next/
+
+# PDF Files (15+ MB each)
+PDF/
+ANALIZ/*.pdf
+
+# ChromaDB Vector Database (50+ MB)
+backend/chroma_db/
+
+# Backend cache files
+backend/services/cache/
+backend/PDF/local_pdf_index.json
+
+# Archive folder
+_archive/
+
 # Local Database (SQLite)
 data.db
 *.db
 *.sqlite
-
-# PDF Data Folder (User content should typically be ignored)
-# Uncomment the next line if you want to ignore all PDFs
-# PDF/
+*.sqlite3
 
 # Cache files
 cache/
 pdf_cache.json
+*.json.cache
 
 # Exported files
 seçili_pozlar.csv
@@ -113,3 +132,9 @@ seçili_pozlar.csv
 
 # Logs
 *.log
+backend_logs.txt
+
+# Debug/test scripts
+reproduce_hang.py
+debug_loader.py
+
