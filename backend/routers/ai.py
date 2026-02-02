@@ -48,6 +48,12 @@ class RefineRequest(BaseModel):
     text: str
 
 
+class LearnRuleRequest(BaseModel):
+    trigger_keywords: List[str]
+    required_item_name: str
+    condition_text: str
+
+
 class AsyncAnalysisRequest(BaseModel):
     description: str
     unit: str
@@ -546,6 +552,117 @@ async def refine_request(request: RefineRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+class ReviewAnalysisRequest(BaseModel):
+    description: str
+    components: List[Dict[str, Any]]
+    totals: Dict[str, Any]
+    unit: str
+
+
+@router.post("/review-analysis")
+async def review_analysis(request: ReviewAnalysisRequest):
+    """
+    Mevcut bir analizi AI ile incele, eksiklikleri ve hataları tespit et.
+    Eleştirmen AI: Mantık kontrolü, eksik kalem tespiti, fiyat anomalileri.
+    """
+    from services.critic_service import CriticService
+    
+    try:
+        critic = CriticService()
+        
+        # Prepare analysis data for critic
+        analysis_data = {
+            "description": request.description,
+            "unit": request.unit,
+            "components": request.components,
+            "totals": request.totals
+        }
+        
+        # Run critic review (returns CriticReview dataclass)
+        critic_review = critic.review_analysis(analysis_data, request.description)
+        
+        # Convert dataclass to dict
+        critic_result = {
+            "status": critic_review.status,
+            "issues": [
+                {
+                    "severity": issue.severity,
+                    "category": issue.category,
+                    "message": issue.message,
+                    "suggestion": issue.suggestion
+                }
+                for issue in critic_review.issues
+            ],
+            "suggestions": critic_review.suggestions
+        }
+        
+        # Calculate updated score based on issues
+        issue_count = len(critic_result["issues"])
+        critical_count = sum(1 for i in critic_result["issues"] if i["severity"] == "critical")
+        
+        base_score = 85
+        score_penalty = (critical_count * 15) + ((issue_count - critical_count) * 5)
+        updated_score = max(20, base_score - score_penalty)
+        
+        # Extract new warnings from issues
+        new_warnings = [
+            f"[{issue['category']}] {issue['message']}"
+            for issue in critic_result["issues"][:3]  # Top 3 as warnings
+        ]
+        
+        return {
+            "critic_review": critic_result,
+            "updated_score": updated_score,
+            "new_warnings": new_warnings
+        }
+        
+    except Exception as e:
+        print(f"[AI REVIEW ERROR] {e}")
+        # Fallback: return basic review
+        return {
+            "critic_review": {
+                "status": "warning",
+                "issues": [{
+                    "severity": "warning",
+                    "category": "Sistem",
+                    "message": f"Analiz incelemesi tamamlanamadı: {str(e)}",
+                    "suggestion": "Analizi manuel olarak kontrol edin."
+                }],
+                "suggestions": []
+            },
+            "updated_score": 60,
+            "new_warnings": ["AI incelemesi tamamlanamadı, lütfen manuel kontrol yapın."]
+        }
+
+
+
+@router.post("/learn-rule")
+def learn_rule(request: LearnRuleRequest):
+    """
+    Kullanıcının AI önerisini kalıcı bir kurala çevirmesini sağlar.
+    """
+    from services.rule_service import RuleService
+    
+    try:
+        service = RuleService()
+        
+        # Basit bir required item yapısı oluştur
+        required_items = [{
+            "name": request.required_item_name,
+            "type": "Malzeme" # Varsayılan olarak malzeme kabul ediyoruz, ileride geliştirilebilir
+        }]
+        
+        rule_id = service.add_rule(
+            trigger_keywords=request.trigger_keywords,
+            required_items=required_items,
+            condition_text=request.condition_text
+        )
+        
+        return {"id": rule_id, "message": "Kural başarıyla öğrenildi."}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================
 # POZ DATA ERİŞİM FONKSİYONLARI

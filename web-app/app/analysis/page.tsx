@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
-import { Sparkles, Loader2, Plus, Save, FileDown, Trash2, Info, Calculator, GraduationCap, X, ArrowRight, AlertTriangle, FileText, Table, XCircle, Box } from 'lucide-react';
+import { Sparkles, Loader2, Plus, Save, FileDown, Trash2, Info, Calculator, GraduationCap, X, ArrowRight, AlertTriangle, FileText, Table, XCircle, Box, Copy, Search } from 'lucide-react';
 import { motion } from 'framer-motion';
 import api from '@/lib/api';
 import AnalysisTable, { AnalysisData } from '@/components/AnalysisTable';
@@ -65,6 +65,8 @@ export default function AnalysisPage() {
     const [correctionDescription, setCorrectionDescription] = useState("");
     const [refineLoading, setRefineLoading] = useState(false);
     const [selectedCompForDetail, setSelectedCompForDetail] = useState<AIComponent | null>(null);
+    const [aiReviewLoading, setAiReviewLoading] = useState(false);
+    const [feedbackModalTab, setFeedbackModalTab] = useState<'ai' | 'manual'>('ai');
 
     // AI request refinement
     const [refineRequestLoading, setRefineRequestLoading] = useState(false);
@@ -261,6 +263,139 @@ export default function AnalysisPage() {
         }
     };
 
+    const generateMarkdown = (): string => {
+        if (!result) return '';
+
+        let md = `# ${analysisName || description}\n\n`;
+        md += `**Birim:** ${displayUnit}\n\n`;
+        md += `## Açıklama\n${result.explanation}\n\n`;
+
+        if (result.technical_description) {
+            md += `## Teknik Tarif\n${result.technical_description}\n\n`;
+        }
+
+        md += `## Analiz Detay Tablosu\n\n`;
+        md += `| Tür | Kod | Açıklama | Birim | Miktar | B.Fiyat | Tutar |\n`;
+        md += `|-----|-----|----------|-------|--------|---------|-------|\n`;
+
+        result.components.forEach(c => {
+            md += `| ${c.type} | ${c.code || '-'} | ${c.name} | ${c.unit} | ${c.quantity.toFixed(3)} | ${c.unit_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} | ${c.total_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} |\n`;
+        });
+
+        md += `\n## Maliyet Özeti\n\n`;
+        md += `- **Malzeme Toplamı:** ${totalMaterial.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL\n`;
+        md += `- **İşçilik Toplamı:** ${totalLabor.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL\n`;
+        md += `- **Nakliye Toplamı:** ${totalTransport.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL\n`;
+        md += `- **Ara Toplam:** ${subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL\n`;
+        md += `- **Genel Gider (%25):** ${overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL\n`;
+        md += `- **Birim Fiyat (1 ${displayUnit}):** ${grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL\n`;
+
+        if (result.metadata?.warnings?.length) {
+            md += `\n## Uyarılar\n\n`;
+            result.metadata.warnings.forEach(w => {
+                md += `- ⚠️ ${w}\n`;
+            });
+        }
+
+        if (result.critic_review?.issues?.length) {
+            md += `\n## Eleştirmen Analizi\n\n`;
+            result.critic_review.issues.forEach(issue => {
+                md += `### ${issue.category}\n`;
+                md += `- **Durum:** ${issue.severity === 'critical' ? '🔴 Kritik' : '🟡 Uyarı'}\n`;
+                md += `- **Mesaj:** ${issue.message}\n`;
+                if (issue.suggestion) md += `- **Öneri:** ${issue.suggestion}\n`;
+                md += `\n`;
+            });
+        }
+
+        return md;
+    };
+
+    const handleCopyAsMarkdown = async () => {
+        const md = generateMarkdown();
+        try {
+            await navigator.clipboard.writeText(md);
+            showNotification("Analiz Markdown olarak kopyalandı!", "success");
+        } catch (e) {
+            console.error(e);
+            showNotification("Kopyalama başarısız oldu.", "error");
+        }
+    };
+
+    const handleLearnRule = async (issue: any) => {
+        if (!description) return;
+
+        try {
+            // Basit bir kural çıkarımı:
+            // "Malzeme var ama işçilik bulunamadı" -> Eksik olan şey "işçilik"
+            let requiredItem = "Bilinmeyen Öğe";
+
+            if (issue.message.toLowerCase().includes("işçilik")) requiredItem = "İşçilik";
+            else if (issue.message.toLowerCase().includes("demir")) requiredItem = "Demir/Donatı";
+            else if (issue.message.toLowerCase().includes("kalıp")) requiredItem = "Kalıp";
+            else if (issue.message.toLowerCase().includes("harç")) requiredItem = "Harç";
+            else if (issue.category === "Eksik Kalem") {
+                // Mesajdan çekmeye çalış: "X bulunamadı"
+                const match = issue.message.match(/([\w\sçğıöşüÇĞİÖŞÜ]+)\s+(bulunamadı|eksik|yok)/i);
+                if (match) requiredItem = match[1].trim();
+            }
+
+            await api.post('/ai/learn-rule', {
+                trigger_keywords: description.split(" ").filter((w: string) => w.length > 3),
+                required_item_name: requiredItem,
+                condition_text: `"${description}" benzeri işlerde ${requiredItem} olmalı`
+            });
+
+            showNotification("Kural kaydedildi! AI artık bunu hatırlayacak.", "success");
+
+        } catch (e) {
+            console.error(e);
+            showNotification("Kural kaydedilemedi.", "error");
+        }
+    };
+
+    const handleAIReview = async () => {
+        if (!result) return;
+        setAiReviewLoading(true);
+        try {
+            const payload = {
+                description: description,
+                components: result.components.map(c => ({
+                    type: c.type,
+                    code: c.code,
+                    name: c.name,
+                    unit: c.unit,
+                    quantity: c.quantity,
+                    unit_price: c.unit_price,
+                    total_price: c.total_price
+                })),
+                totals: { subtotal, overhead, grandTotal },
+                unit: displayUnit
+            };
+
+            const res = await api.post('/ai/review-analysis', payload);
+
+            // Update result with new critic review
+            setResult(prev => prev ? {
+                ...prev,
+                critic_review: res.data.critic_review,
+                metadata: {
+                    analysis_score: res.data.updated_score || prev.metadata?.analysis_score || 70,
+                    confidence_level: prev.metadata?.confidence_level || 'medium',
+                    warnings: [...(prev.metadata?.warnings || []), ...(res.data.new_warnings || [])]
+                }
+            } : null);
+
+            refetchLLMUsage();
+            showNotification("AI analiz tamamlandı! Sonuçlar güncellendi.", "success");
+        } catch (e: any) {
+            console.error(e);
+            showNotification("AI analiz sırasında hata: " + (e.response?.data?.detail || e.message), "error");
+        } finally {
+            setAiReviewLoading(false);
+        }
+    };
+
     const handleAddAllToProject = () => {
         if (!result) return;
         result.components.forEach(comp => {
@@ -401,17 +536,26 @@ export default function AnalysisPage() {
                             </div>
                         </div>
 
-                        {/* Suggestions / Quick Chips */}
+                        {/* Suggestions / Quick Chips - DSI Odaklı */}
                         <div className="flex flex-wrap items-center justify-center gap-3">
-                            <div className="w-full text-center text-[10px] font-bold text-[#52525b] uppercase tracking-widest mb-2">Popüler Aramalar</div>
-                            <button onClick={() => setDescription("C30/37 betonarme duvar yapılması")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
-                                C30/37 Betonarme Duvar
+                            <div className="w-full text-center text-[10px] font-bold text-[#52525b] uppercase tracking-widest mb-2">Popüler Aramalar (DSİ)</div>
+                            <button onClick={() => setDescription("Taşkın koruma duvarı yapılması (C30 beton, kalıp, demir dahil)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                Taşkın Koruma Duvarı
                             </button>
-                            <button onClick={() => setDescription("200 dozlu demirsiz beton kanal")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
-                                200 Doz Beton Kanal
+                            <button onClick={() => setDescription("Betonarme istinat duvarı yapılması (Barbakan, drenaj ve geri dolgu dahil)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                İstinat Duvarı
                             </button>
-                            <button onClick={() => setDescription("El ile sert küskülük kazı yapılması")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
-                                El ile Kazı
+                            <button onClick={() => setDescription("Harçlı taş duvar örülmesi (60 cm kalınlıkta, derzli)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                Taş Duvar
+                            </button>
+                            <button onClick={() => setDescription("Trapez kesitli sulama kanalı betonu dökülmesi (C20, perdahlı)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                Trapez Kanal
+                            </button>
+                            <button onClick={() => setDescription("Kutu menfez yapılması (Kazı, betonarme, yalıtım dahil)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                Kutu Menfez
+                            </button>
+                            <button onClick={() => setDescription("Taşkın koruma tesisi için brit yapılması (Grobeton, taş dolgu)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                Brit Yapısı
                             </button>
                         </div>
                     </motion.div>
@@ -629,26 +773,28 @@ export default function AnalysisPage() {
                                 </div>
                                 <div className="p-1">
                                     <AnalysisTable
-                                        data={result.analysis_data || {
-                                            poz_no: "Y.ANALİZ",
-                                            name: analysisName || description,
-                                            unit: displayUnit,
-                                            components: result.components.map(c => ({
-                                                type: c.type,
-                                                code: c.code,
-                                                name: c.name,
-                                                unit: c.unit,
-                                                quantity: c.quantity.toString(),
-                                                price: c.unit_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                total: c.total_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 })
-                                            })),
-                                            totals: {
-                                                subtotal: subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                profit: overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                grand_total: grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                label: `1 ${displayUnit} Fiyatı`
-                                            }
-                                        }}
+                                        data={(result.analysis_data && result.analysis_data.components && result.analysis_data.components.length > 0)
+                                            ? result.analysis_data
+                                            : {
+                                                poz_no: "Y.ANALİZ",
+                                                name: analysisName || description,
+                                                unit: displayUnit,
+                                                components: result.components.map(c => ({
+                                                    type: c.type,
+                                                    code: c.code,
+                                                    name: c.name,
+                                                    unit: c.unit,
+                                                    quantity: c.quantity.toString(),
+                                                    price: c.unit_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                    total: c.total_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 })
+                                                })),
+                                                totals: {
+                                                    subtotal: subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                    profit: overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                    grand_total: grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                    label: `1 ${displayUnit} Fiyatı`
+                                                }
+                                            }}
                                         description={result.technical_description || result.explanation}
                                     />
                                 </div>
@@ -689,7 +835,7 @@ export default function AnalysisPage() {
                                         <ArrowRight className="w-4 h-4 opacity-30 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
                                     </button>
 
-                                    <div className="grid grid-cols-2 gap-3">
+                                    <div className="grid grid-cols-3 gap-3">
                                         <button
                                             onClick={handleExportExcel}
                                             className="flex flex-col items-center justify-center p-4 bg-[#18181b] hover:bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-2xl border border-[#27272a] transition-all gap-2 group active:scale-[0.98]"
@@ -698,11 +844,18 @@ export default function AnalysisPage() {
                                             <span className="text-[10px] font-bold uppercase tracking-widest">Excel</span>
                                         </button>
                                         <button
-                                            onClick={() => setShowFeedbackModal(true)}
-                                            className="flex flex-col items-center justify-center p-4 bg-amber-500/5 hover:bg-amber-500/10 text-amber-500/70 hover:text-amber-500 rounded-2xl border border-amber-500/10 transition-all gap-2 group active:scale-[0.98]"
+                                            onClick={handleCopyAsMarkdown}
+                                            className="flex flex-col items-center justify-center p-4 bg-[#18181b] hover:bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-2xl border border-[#27272a] transition-all gap-2 group active:scale-[0.98]"
                                         >
-                                            <GraduationCap className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                                            <span className="text-[10px] font-bold uppercase tracking-widest">Öğret</span>
+                                            <Copy className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                                            <span className="text-[10px] font-bold uppercase tracking-widest">Kopyala</span>
+                                        </button>
+                                        <button
+                                            onClick={() => { setFeedbackModalTab('ai'); setShowFeedbackModal(true); }}
+                                            className="flex flex-col items-center justify-center p-4 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 hover:text-purple-300 rounded-2xl border border-purple-500/20 transition-all gap-2 group active:scale-[0.98]"
+                                        >
+                                            <Sparkles className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                                            <span className="text-[10px] font-bold uppercase tracking-widest">Öneriler</span>
                                         </button>
                                     </div>
                                 </div>
@@ -740,15 +893,15 @@ export default function AnalysisPage() {
                 </div>
             )}
 
-            {/* AI'ya Öğret Modal */}
+            {/* Öneriler Modal - Sekmeli (AI Analiz / Manuel Düzeltme) */}
             {showFeedbackModal && (
                 <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in duration-300">
                     <div className="bg-[#09090b] border border-[#27272a] rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto ring-1 ring-white/10">
                         {/* Modal Header */}
                         <div className="p-6 border-b border-[#27272a] flex justify-between items-center bg-black/40">
                             <div className="flex items-center">
-                                <GraduationCap className="w-6 h-6 text-blue-500 mr-3" />
-                                <h2 className="text-xl font-bold text-[#fafafa] tracking-tight">AI'ya Öğret</h2>
+                                <Sparkles className="w-6 h-6 text-purple-500 mr-3" />
+                                <h2 className="text-xl font-bold text-[#fafafa] tracking-tight">Analiz Önerileri</h2>
                             </div>
                             <button
                                 onClick={() => setShowFeedbackModal(false)}
@@ -758,103 +911,222 @@ export default function AnalysisPage() {
                             </button>
                         </div>
 
-                        {/* Modal Content */}
+                        {/* Tabs */}
+                        <div className="flex border-b border-[#27272a]">
+                            <button
+                                onClick={() => setFeedbackModalTab('ai')}
+                                className={cn(
+                                    "flex-1 px-6 py-4 text-sm font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2",
+                                    feedbackModalTab === 'ai'
+                                        ? "text-purple-400 border-b-2 border-purple-500 bg-purple-500/5"
+                                        : "text-[#71717a] hover:text-[#fafafa] hover:bg-[#18181b]"
+                                )}
+                            >
+                                <Search className="w-4 h-4" />
+                                AI Analiz
+                            </button>
+                            <button
+                                onClick={() => setFeedbackModalTab('manual')}
+                                className={cn(
+                                    "flex-1 px-6 py-4 text-sm font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2",
+                                    feedbackModalTab === 'manual'
+                                        ? "text-amber-400 border-b-2 border-amber-500 bg-amber-500/5"
+                                        : "text-[#71717a] hover:text-[#fafafa] hover:bg-[#18181b]"
+                                )}
+                            >
+                                <GraduationCap className="w-4 h-4" />
+                                Manuel Düzeltme
+                            </button>
+                        </div>
+
+                        {/* Tab Content */}
                         <div className="p-6 space-y-6">
-                            <div className="bg-blue-600/10 border border-blue-500/20 rounded-lg p-4">
-                                <p className="text-blue-400 text-sm leading-relaxed">
-                                    <span className="font-bold">Neden kullanılır?</span> AI hatalı bir analiz yaptığında, doğru sonuçları manuel düzelttikten sonra buradan gönderirsiniz.
-                                    AI, gelecekteki benzer sorgularda bu düzeltmeyi referans alacaktır.
-                                </p>
-                            </div>
+                            {feedbackModalTab === 'ai' ? (
+                                <>
+                                    {/* AI Analysis Tab */}
+                                    <div className="bg-purple-600/10 border border-purple-500/20 rounded-lg p-4">
+                                        <p className="text-purple-400 text-sm leading-relaxed">
+                                            <span className="font-bold">AI Analiz:</span> Mevcut analizi yapay zeka ile inceleyin. Eksik kalemleri, mantık hatalarını ve fiyat anomalilerini tespit eder.
+                                        </p>
+                                    </div>
 
-                            <div className="space-y-2">
-                                <label className="text-xs font-bold text-[#71717a] uppercase tracking-widest">Düzeltme Türü</label>
-                                <select
-                                    value={correctionType}
-                                    onChange={(e) => setCorrectionType(e.target.value)}
-                                    className="w-full px-4 py-2.5 bg-[#18181b] border border-[#27272a] text-[#fafafa] rounded-lg focus:ring-1 focus:ring-blue-500/50 focus:border-blue-500/50 outline-none transition-all"
-                                >
-                                    <option value="wrong_method">Yanlış Yöntem (örn. elle yerine makine)</option>
-                                    <option value="missing_item">Eksik Kalem (örn. nakliye eklenmemiş)</option>
-                                    <option value="wrong_price">Yanlış Fiyat</option>
-                                    <option value="wrong_quantity">Yanlış Miktar</option>
-                                    <option value="other">Diğer</option>
-                                </select>
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-xs font-bold text-[#71717a] uppercase tracking-widest">Düzeltme Açıklaması</label>
-                                <div className="relative group">
-                                    <textarea
-                                        value={correctionDescription}
-                                        onChange={(e) => setCorrectionDescription(e.target.value)}
-                                        placeholder="Örn: Beton santrali ile taş duvar demek, beton döküm işçiliği ve hazır beton malzemesi demektir, taş duvar malzemeleri değil..."
-                                        rows={4}
-                                        className="w-full px-4 py-3 bg-[#18181b] border border-[#27272a] text-[#fafafa] rounded-lg focus:ring-1 focus:ring-blue-500/50 focus:border-blue-500/50 outline-none resize-none pr-12 text-sm leading-relaxed"
-                                    />
-                                    <button
-                                        onClick={handleRefineDescription}
-                                        disabled={refineLoading || !correctionDescription.trim()}
-                                        className="absolute right-3 top-3 p-2 bg-[#27272a] text-blue-500 rounded-lg hover:bg-[#3f3f46] transition-all border border-[#3f3f46] shadow-sm disabled:opacity-50"
-                                        title="AI ile profesyonelce düzenle"
-                                    >
-                                        {refineLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                                    </button>
-                                </div>
-                                <p className="text-[11px] text-[#71717a]">
-                                    AI'nın hatasını açıkça belirtin. Bu açıklama gelecekteki sorgularda referans olarak kullanılacak.
-                                </p>
-                            </div>
-
-                            <div className="bg-black/40 border border-[#27272a] rounded-lg p-5">
-                                <h3 className="text-xs font-bold text-[#71717a] uppercase tracking-widest mb-4">Gönderilecek Bileşenler ({result?.components.length || 0})</h3>
-                                <div className="max-h-40 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-                                    {result?.components.map((comp) => (
-                                        <div key={comp.id} className="flex items-center justify-between text-sm py-1 border-b border-[#18181b] last:border-0 hover:bg-[#18181b]/50 transition-colors">
-                                            <span className="flex items-center">
-                                                <span className={cn(
-                                                    "text-[9px] font-black uppercase px-2 py-0.5 rounded mr-3 tracking-tighter",
-                                                    comp.type === 'Malzeme' ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' :
-                                                        comp.type === 'İşçilik' ? 'bg-orange-600/20 text-orange-400 border border-orange-500/30' :
-                                                            comp.type === 'Nakliye' ? 'bg-green-600/20 text-green-400 border border-green-500/30' :
-                                                                'bg-zinc-800 text-zinc-400 border border-zinc-700'
-                                                )}>
-                                                    {comp.type}
-                                                </span>
-                                                <span className="text-[#fafafa] font-medium">{comp.name}</span>
-                                            </span>
-                                            <span className="text-xs font-mono text-[#71717a]">
-                                                {comp.quantity} {comp.unit} × {comp.unit_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL
-                                            </span>
+                                    {/* Current Analysis Summary */}
+                                    <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-5">
+                                        <h3 className="text-xs font-bold text-[#71717a] uppercase tracking-widest mb-3">Mevcut Analiz</h3>
+                                        <p className="text-[#fafafa] font-medium text-sm leading-relaxed italic mb-2">"{description}"</p>
+                                        <div className="flex items-center gap-4 text-xs text-[#71717a]">
+                                            <span>Birim: <strong className="text-[#fafafa]">{displayUnit}</strong></span>
+                                            <span>Kalem: <strong className="text-[#fafafa]">{result?.components.length || 0}</strong></span>
+                                            <span>Toplam: <strong className="text-blue-400">{grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL</strong></span>
                                         </div>
-                                    ))}
-                                </div>
-                            </div>
+                                    </div>
 
-                            <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-5">
-                                <h3 className="text-xs font-bold text-[#blue-500] uppercase tracking-widest mb-2">Orijinal Sorgu</h3>
-                                <p className="text-[#fafafa] font-medium text-sm leading-relaxed italic">"{description}"</p>
-                                <p className="text-[#71717a] text-[10px] mt-2 font-bold uppercase">Birim: {displayUnit}</p>
-                            </div>
+                                    {/* AI Review Result Preview */}
+                                    {result?.critic_review && (
+                                        <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-5 space-y-3">
+                                            <h3 className="text-xs font-bold text-[#71717a] uppercase tracking-widest">Son AI İnceleme Sonucu</h3>
+
+                                            {result.critic_review.status === 'ok' ? (
+                                                <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-3">
+                                                    <div className="p-2 bg-green-500/20 rounded-full">
+                                                        <Sparkles className="w-4 h-4 text-green-500" />
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-sm font-bold text-green-500">Mükemmel!</div>
+                                                        <div className="text-xs text-green-400/80">Analizde herhangi bir sorun tespit edilmedi.</div>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
+                                                    {result.critic_review.issues.slice(0, 3).map((issue, idx) => (
+                                                        <div key={idx} className={cn(
+                                                            "p-3 rounded-lg border text-xs",
+                                                            issue.severity === 'critical'
+                                                                ? "bg-red-500/10 border-red-500/20 text-red-400"
+                                                                : "bg-amber-500/10 border-amber-500/20 text-amber-400"
+                                                        )}>
+                                                            <div className="font-bold flex items-center gap-2">
+                                                                {issue.severity === 'critical' && <XCircle className="w-3 h-3" />}
+                                                                {issue.category}
+                                                            </div>
+                                                            <div className="opacity-80 mt-1 leading-relaxed">{issue.message}</div>
+                                                            {issue.suggestion && (
+                                                                <div className="mt-2 flex items-center gap-2">
+                                                                    <div className="text-[10px] bg-white/5 p-1.5 rounded border border-white/5 opacity-70 flex-1">
+                                                                        💡 {issue.suggestion}
+                                                                    </div>
+                                                                    {issue.category === "Eksik Kalem" && (
+                                                                        <button
+                                                                            onClick={() => handleLearnRule(issue)}
+                                                                            className="bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded p-1.5 text-[10px] whitespace-nowrap transition-colors"
+                                                                            title="Bu düzeltmeyi kural olarak kaydet"
+                                                                        >
+                                                                            + Kural Yap
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* AI Analyze Button */}
+                                    <button
+                                        onClick={handleAIReview}
+                                        disabled={aiReviewLoading}
+                                        className="w-full flex items-center justify-center gap-3 px-6 py-4 bg-purple-600 hover:bg-purple-500 text-white rounded-xl transition-all font-bold shadow-xl shadow-purple-900/30 active:scale-[0.98] disabled:opacity-50"
+                                    >
+                                        {aiReviewLoading ? (
+                                            <>
+                                                <Loader2 className="w-5 h-5 animate-spin" />
+                                                AI Analiz Ediliyor...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Search className="w-5 h-5" />
+                                                AI ile Analiz Et
+                                            </>
+                                        )}
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    {/* Manual Correction Tab */}
+                                    <div className="bg-amber-600/10 border border-amber-500/20 rounded-lg p-4">
+                                        <p className="text-amber-400 text-sm leading-relaxed">
+                                            <span className="font-bold">Manuel Düzeltme:</span> AI hatalı bir analiz yaptığında, doğru sonuçları buradan öğretebilirsiniz. AI, gelecekteki benzer sorgularda bu düzeltmeyi referans alacaktır.
+                                        </p>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-[#71717a] uppercase tracking-widest">Düzeltme Türü</label>
+                                        <select
+                                            value={correctionType}
+                                            onChange={(e) => setCorrectionType(e.target.value)}
+                                            className="w-full px-4 py-2.5 bg-[#18181b] border border-[#27272a] text-[#fafafa] rounded-lg focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/50 outline-none transition-all"
+                                        >
+                                            <option value="wrong_method">Yanlış Yöntem (örn. elle yerine makine)</option>
+                                            <option value="missing_item">Eksik Kalem (örn. nakliye eklenmemiş)</option>
+                                            <option value="wrong_price">Yanlış Fiyat</option>
+                                            <option value="wrong_quantity">Yanlış Miktar</option>
+                                            <option value="other">Diğer</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-[#71717a] uppercase tracking-widest">Düzeltme Açıklaması</label>
+                                        <div className="relative group">
+                                            <textarea
+                                                value={correctionDescription}
+                                                onChange={(e) => setCorrectionDescription(e.target.value)}
+                                                placeholder="Örn: Beton santrali ile taş duvar demek, beton döküm işçiliği ve hazır beton malzemesi demektir, taş duvar malzemeleri değil..."
+                                                rows={4}
+                                                className="w-full px-4 py-3 bg-[#18181b] border border-[#27272a] text-[#fafafa] rounded-lg focus:ring-1 focus:ring-amber-500/50 focus:border-amber-500/50 outline-none resize-none pr-12 text-sm leading-relaxed"
+                                            />
+                                            <button
+                                                onClick={handleRefineDescription}
+                                                disabled={refineLoading || !correctionDescription.trim()}
+                                                className="absolute right-3 top-3 p-2 bg-[#27272a] text-amber-500 rounded-lg hover:bg-[#3f3f46] transition-all border border-[#3f3f46] shadow-sm disabled:opacity-50"
+                                                title="AI ile profesyonelce düzenle"
+                                            >
+                                                {refineLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                                            </button>
+                                        </div>
+                                        <p className="text-[11px] text-[#71717a]">
+                                            AI'nın hatasını açıkça belirtin. Bu açıklama gelecekteki sorgularda referans olarak kullanılacak.
+                                        </p>
+                                    </div>
+
+                                    <div className="bg-black/40 border border-[#27272a] rounded-lg p-5">
+                                        <h3 className="text-xs font-bold text-[#71717a] uppercase tracking-widest mb-4">Gönderilecek Bileşenler ({result?.components.length || 0})</h3>
+                                        <div className="max-h-32 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+                                            {result?.components.slice(0, 5).map((comp) => (
+                                                <div key={comp.id} className="flex items-center justify-between text-sm py-1 border-b border-[#18181b] last:border-0">
+                                                    <span className="flex items-center">
+                                                        <span className={cn(
+                                                            "text-[9px] font-black uppercase px-2 py-0.5 rounded mr-3 tracking-tighter",
+                                                            comp.type === 'Malzeme' ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' :
+                                                                comp.type === 'İşçilik' ? 'bg-orange-600/20 text-orange-400 border border-orange-500/30' :
+                                                                    comp.type === 'Nakliye' ? 'bg-green-600/20 text-green-400 border border-green-500/30' :
+                                                                        'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                                                        )}>
+                                                            {comp.type}
+                                                        </span>
+                                                        <span className="text-[#fafafa] font-medium truncate max-w-[200px]">{comp.name}</span>
+                                                    </span>
+                                                </div>
+                                            ))}
+                                            {(result?.components.length || 0) > 5 && (
+                                                <div className="text-xs text-[#71717a] italic">... ve {(result?.components.length || 0) - 5} kalem daha</div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
                         </div>
 
                         {/* Modal Footer */}
                         <div className="p-6 border-t border-[#27272a] flex justify-end gap-3 bg-black/40">
                             <button
                                 onClick={() => setShowFeedbackModal(false)}
-                                disabled={feedbackLoading}
+                                disabled={feedbackLoading || aiReviewLoading}
                                 className="px-5 py-2 text-[#a1a1aa] hover:text-[#fafafa] hover:bg-[#18181b] rounded-lg transition-all font-bold text-sm"
                             >
-                                İptal
+                                Kapat
                             </button>
-                            <button
-                                onClick={handleSubmitFeedback}
-                                disabled={feedbackLoading || !correctionDescription.trim()}
-                                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all font-bold text-sm flex items-center shadow-lg shadow-blue-900/40 active:scale-95"
-                            >
-                                {feedbackLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <GraduationCap className="w-4 h-4 mr-2" />}
-                                AI'ya Öğret
-                            </button>
+                            {feedbackModalTab === 'manual' && (
+                                <button
+                                    onClick={handleSubmitFeedback}
+                                    disabled={feedbackLoading || !correctionDescription.trim()}
+                                    className="px-6 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all font-bold text-sm flex items-center shadow-lg shadow-amber-900/40 active:scale-95"
+                                >
+                                    {feedbackLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <GraduationCap className="w-4 h-4 mr-2" />}
+                                    AI'ya Öğret
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>

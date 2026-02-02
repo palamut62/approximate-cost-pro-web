@@ -235,6 +235,19 @@ class DatabaseManager:
             )
         ''')
 
+        # User Rules / Öğrenilen Kurallar Tablosu
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                trigger_keywords TEXT, -- JSON list of keywords
+                required_items TEXT,   -- JSON list of required components
+                condition_text TEXT,   -- Human readable condition
+                created_date TEXT,
+                use_count INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT 1
+            )
+        ''')
+
         conn.commit()
         conn.close()
 

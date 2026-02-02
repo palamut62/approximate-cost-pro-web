@@ -116,21 +116,21 @@ def load_initial_data():
     TRAINING_DATA_SERVICE = TrainingDataService(str(training_file))
 
     # 3. Ayrıca app.state'e de kaydet (router erişimi için)
-    app.state.poz_data = data
-    app.state.loaded_files = files
+    app.state.poz_data = all_data
+    app.state.loaded_files = all_files
     app.state.training_data_service = TRAINING_DATA_SERVICE
 
-    print(f"Loaded {count} items from {len(files)} files.")
+    print(f"✅ Loaded {len(all_data)} items from {len(all_files)} files.")
     training_stats = TRAINING_DATA_SERVICE.get_stats()
-    print(f"Loaded {training_stats.get('total_examples', 0)} training examples.")
+    print(f"✅ Loaded {training_stats.get('total_examples', 0)} training examples.")
 
     # 4. Vector DB (Lazy Loading Mode)
     from services.vector_db_service import VectorDBService
     vector_service = VectorDBService()
     app.state.vector_db_service = vector_service
     # İlk AI analizi yapıldığında otomatik olarak ingestion başlayacak
-    app.state.poz_data_for_vector = list(data.values())
-    print(f"[VECTOR_DB] Lazy mode aktif. İlk AI analizinde {len(data)} poz yüklenecek.")
+    app.state.poz_data_for_vector = list(all_data.values())
+    print(f"[VECTOR_DB] Lazy mode aktif. İlk AI analizinde {len(all_data)} poz yüklenecek.")
 
 @app.get("/")
 def read_root():
@@ -138,21 +138,24 @@ def read_root():
 
 @app.get("/api/data/status")
 def get_data_status():
+    poz_data = getattr(app.state, 'poz_data', {})
+    loaded_files = getattr(app.state, 'loaded_files', [])
     return {
-        "item_count": len(POZ_DATA),
-        "file_count": len(LOADED_FILES),
-        "files": LOADED_FILES
+        "item_count": len(poz_data),
+        "file_count": len(loaded_files),
+        "files": loaded_files
     }
 
 @app.get("/api/data/search")
 def search_poz(q: str):
     """Search for poz items (fast, no PDF scans)"""
+    poz_data = getattr(app.state, 'poz_data', {})
     results = []
     if not q:
         return []
     
     q_lower = q.lower()
-    for poz in POZ_DATA.values():
+    for poz in poz_data.values():
         if (q_lower in poz['poz_no'].lower() or 
             q_lower in poz['description'].lower() or 
             q_lower in poz['institution'].lower()):
@@ -166,10 +169,11 @@ def search_poz(q: str):
 @app.get("/api/data/poz/{poz_no}")
 def get_poz_details(poz_no: str):
     """Get detailed info for a single poz (includes PDF scans)"""
-    if poz_no not in POZ_DATA:
+    poz_data = getattr(app.state, 'poz_data', {})
+    if poz_no not in poz_data:
         raise HTTPException(status_code=404, detail="Poz bulunamadı")
     
-    poz = POZ_DATA[poz_no].copy()
+    poz = poz_data[poz_no].copy()
     
     from services.local_pdf_service import get_local_pdf_service
     pdf_service = get_local_pdf_service()

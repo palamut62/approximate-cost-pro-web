@@ -50,6 +50,10 @@ class CriticService:
             'seramik': (300, 1500),
             'boya': (50, 150),
         }
+        
+        # Rule Service
+        from services.rule_service import RuleService
+        self.rule_service = RuleService()
     
     def review_analysis(self, 
                        analysis_result: Dict,
@@ -81,6 +85,9 @@ class CriticService:
         
         # 5. Genel eksik kontroller
         all_issues.extend(self.check_missing_labor(components))
+
+        # 6. Kullanıcı Tanımlı Kurallar (Öğrenen AI)
+        all_issues.extend(self.check_user_rules(components, description))
         
         # Durum belirle
         has_critical = any(i.severity == "critical" for i in all_issues)
@@ -114,7 +121,9 @@ class CriticService:
         
         # Bileşenleri kontrol et
         has_concrete = any('beton' in c.get('name', '').lower() for c in components)
-        has_rebar = any('demir' in c.get('name', '').lower() for c in components)
+        # Demir/çelik aramak için daha geniş keyword listesi
+        rebar_keywords = ['demir', 'çelik', 'donatı', 's420', 's500', 'nervürlü', 'hasır']
+        has_rebar = any(any(kw in c.get('name', '').lower() for kw in rebar_keywords) for c in components)
         has_formwork = any('kalıp' in c.get('name', '').lower() for c in components)
         
         if has_betonarme_keyword or (has_concrete and 'döşeme' in desc_lower):
@@ -268,6 +277,39 @@ class CriticService:
                 suggestion="İnşaat işlerinde genellikle işçilik gerekir. Kontrol edin."
             ))
         
+        return issues
+
+    def check_user_rules(self, components: List[Dict], description: str) -> List[Issue]:
+        """Kullanıcı tarafından öğretilen kuralları kontrol et"""
+        issues = []
+        matching_rules = self.rule_service.find_matching_rules(description)
+        
+        for rule in matching_rules:
+            missing_items = []
+            for required_item in rule['required_items']:
+                # Göz gevşek kontrol: isim içinde geçiyor mu?
+                # Örn: required="Harç" -> components içerisinde "harç" veya "çimento" var mı?
+                req_name_lower = required_item['name'].lower()
+                
+                is_present = any(req_name_lower in c.get('name', '').lower() for c in components)
+                
+                if not is_present:
+                    missing_items.append(required_item['name'])
+            
+            if missing_items:
+                # Kural ihlali
+                issues.append(Issue(
+                    severity="warning",
+                    category="Öğrenilmiş Kural",
+                    message=f"Eksik kalemler tespit edildi: {', '.join(missing_items)}",
+                    suggestion=f"Daha önce bu iş için şu kuralı kaydettiniz: {rule['condition_text']}. {', '.join(missing_items)} eklemeniz önerilir."
+                ))
+                # Kural işe yaradı, sayacı artır
+                try:
+                    self.rule_service.increment_usage(rule['id'])
+                except:
+                    pass
+
         return issues
 
 # Singleton instance
