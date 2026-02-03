@@ -52,10 +52,15 @@ class VectorDBService:
 
             print("[VECTOR_DB] Embedding modeli yükleniyor (CPU modunda)...")
             try:
-                self.model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2', device='cpu')
+                # Türkçe destekli model
+                self.model = SentenceTransformer('emrecan/bert-base-turkish-cased-mean-nli-stsb-tr', device='cpu')
                 self.client = chromadb.PersistentClient(path=self.persist_directory)
                 self.collection = self.client.get_or_create_collection(
                     name=self.collection_name,
+                    metadata={"hnsw:space": "cosine"}
+                )
+                self.feedback_collection = self.client.get_or_create_collection(
+                    name="user_feedbacks",
                     metadata={"hnsw:space": "cosine"}
                 )
                 self._model_loaded = True
@@ -205,6 +210,58 @@ class VectorDBService:
 
         except Exception as e:
             print(f"[VECTOR_DB] Arama hatası: {e}")
+            return []
+
+    def index_feedback(self, feedback_data: Dict[str, Any]):
+        """Kullanıcı geri bildirimini vektör veritabanına ekle"""
+        if not self._ensure_model_loaded():
+            return
+
+        try:
+            # ID ve Metin
+            doc_id = feedback_data.get('id') or f"fb_{len(feedback_data)}"
+            doc_text = f"{feedback_data.get('original_description')} -> {feedback_data.get('correction_type')} : {feedback_data.get('user_note')}"
+            
+            # Embed
+            embeddings = self.model.encode([doc_text]).tolist()
+            
+            self.feedback_collection.upsert(
+                ids=[str(doc_id)],
+                embeddings=embeddings,
+                documents=[doc_text],
+                metadatas=[feedback_data]
+            )
+            print(f"[VECTOR_DB] Feedback eklendi: {doc_id}")
+            
+        except Exception as e:
+            print(f"[VECTOR_DB] Feedback ekleme hatası: {e}")
+
+    def search_feedback(self, query_text: str, n_results: int = 3) -> List[Dict[str, Any]]:
+        """Benzer geri bildirimleri ara"""
+        if not self._ensure_model_loaded():
+            return []
+            
+        if self.feedback_collection.count() == 0:
+            return []
+            
+        try:
+            query_embedding = self.model.encode([query_text]).tolist()
+            
+            results = self.feedback_collection.query(
+                query_embeddings=query_embedding,
+                n_results=n_results
+            )
+            
+            formatted_results = []
+            if results['ids'] and results['ids'][0]:
+                for i, doc_id in enumerate(results['ids'][0]):
+                    metadata = results['metadatas'][0][i]
+                    formatted_results.append(metadata)
+                    
+            return formatted_results
+            
+        except Exception as e:
+            print(f"[VECTOR_DB] Feedback arama hatası: {e}")
             return []
 
     def get_count(self) -> int:

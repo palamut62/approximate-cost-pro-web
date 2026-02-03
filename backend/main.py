@@ -22,7 +22,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from services.data_manager import CSVLoader
 from services.training_data_service import TrainingDataService
-from routers import ai, projects, analyses, feedback, settings, usage
+from routers import ai, projects, analyses, feedback, settings, usage, dashboard
 from database import DatabaseManager
 
 app = FastAPI(title="Approximate Cost API", version="1.0.0")
@@ -34,6 +34,7 @@ app.include_router(analyses.router, prefix="/api")
 app.include_router(feedback.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(usage.router, prefix="/api")
+app.include_router(dashboard.router, prefix="/api")
 
 # CORS Setup
 app.add_middleware(

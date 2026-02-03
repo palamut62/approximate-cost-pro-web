@@ -25,6 +25,9 @@ class ProjectSchema(BaseModel):
     project_date: Optional[str] = ""
     items: List[ProjectItemSchema] = []
 
+class ProjectRenameSchema(BaseModel):
+    name: str
+
 @router.get("/")
 def get_projects():
     return db.get_projects()
@@ -95,3 +98,11 @@ def update_project(project_id: int, project: ProjectSchema):
 def delete_project(project_id: int):
     db.delete_project(project_id)
     return {"message": "Project deleted successfully"}
+
+
+@router.patch("/{project_id}/rename")
+def rename_project(project_id: int, project: ProjectRenameSchema):
+    success = db.rename_project(project_id, project.name)
+    if not success:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"message": "Project renamed successfully"}

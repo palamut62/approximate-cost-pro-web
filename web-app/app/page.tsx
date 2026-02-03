@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import api from '@/lib/api';
-import { LayoutDashboard, FileText, Calculator, Sparkles, Save, ArrowRight, Archive, CheckCircle2, AlertCircle, XCircle, Trash2 } from 'lucide-react';
+import { LayoutDashboard, FileText, Calculator, Sparkles, Save, ArrowRight, Archive, CheckCircle2, AlertCircle, XCircle, Trash2, Settings } from 'lucide-react';
 import Link from 'next/link';
 import { useLLMUsage } from '@/context/LLMUsageContext';
 import { useNotification } from '@/context/NotificationContext';
@@ -12,6 +12,8 @@ export default function Home() {
   const [recentAnalyses, setRecentAnalyses] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [backendStatus, setBackendStatus] = useState<{ status: string; poz_count: number } | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
   const { usageData, loading: usageLoading } = useLLMUsage();
   const { confirm, showNotification } = useNotification();
 
@@ -72,6 +74,36 @@ export default function Home() {
     });
   };
 
+  const handleStartEdit = (e: React.MouseEvent, project: any) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setEditingId(project.id);
+    setEditName(project.name || `Analiz #${project.id.toString().substring(0, 8)}`);
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent | React.FocusEvent, id: number) => {
+    e.preventDefault();
+    if (!editName.trim()) return;
+
+    try {
+      await api.patch(`/projects/${id}/rename`, { name: editName });
+      setRecentAnalyses(prev => prev.map(p => p.id === id ? { ...p, name: editName } : p));
+      setEditingId(null);
+      showNotification("Proje adı güncellendi", "success");
+    } catch (error) {
+      console.error("Rename error:", error);
+      showNotification("İsim güncelleme hatası", "error");
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent, id: number) => {
+    if (e.key === 'Enter') {
+      handleSaveEdit(e, id);
+    } else if (e.key === 'Escape') {
+      setEditingId(null);
+    }
+  };
+
   // Placeholder for TransportCalculator component
   const TransportCalculator = () => (
     <div className="bg-[#09090b] border border-[#18181b] rounded-lg p-4 text-sm text-[#a1a1aa]">
@@ -96,6 +128,9 @@ export default function Home() {
             <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
             <span className="text-xs font-medium text-[#a1a1aa]">Sistem Aktif</span>
           </div>
+          <Link href="/settings" className="p-2 bg-[#18181b] border border-[#27272a] rounded-lg hover:bg-[#27272a] hover:text-white transition-colors text-[#a1a1aa]" title="Ayarlar">
+            <Settings className="w-5 h-5" />
+          </Link>
         </div>
       </div>
 
@@ -178,9 +213,26 @@ export default function Home() {
                   <Link href={`/cost?id=${item.id}`} className="absolute inset-0 z-0" aria-label="Projeye git" />
 
                   <div className="space-y-1 relative z-10 pointer-events-none">
-                    <h4 className="text-sm font-semibold text-[#fafafa] group-hover:text-blue-400 transition-colors">
-                      {item.name || `Analiz #${item.id.substring(0, 8)}`}
-                    </h4>
+                    {editingId === item.id ? (
+                      <input
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        onBlur={(e) => handleSaveEdit(e, item.id)}
+                        onKeyDown={(e) => handleKeyDown(e, item.id)}
+                        className="pointer-events-auto bg-[#27272a] border border-blue-500 rounded px-2 py-0.5 text-sm md:w-64 text-white outline-none"
+                        autoFocus
+                        onClick={(e) => e.preventDefault()}
+                      />
+                    ) : (
+                      <h4
+                        className="text-sm font-semibold text-[#fafafa] group-hover:text-blue-400 transition-colors pointer-events-auto cursor-text"
+                        onDoubleClick={(e) => handleStartEdit(e, item)}
+                        title="Değiştirmek için çift tıklayın"
+                      >
+                        {item.name || `Analiz #${item.id.toString().substring(0, 8)}`}
+                      </h4>
+                    )}
                     <div className="flex items-center gap-2 text-xs text-[#71717a]">
                       <span>{new Date(item.created_at).toLocaleDateString('tr-TR')}</span>
                       <span>•</span>

@@ -18,7 +18,9 @@
       "Bash(netstat:*)",
       "Bash(top:*)",
       "Bash(kill:*)",
-      "Bash(head:*)"
+      "Bash(head:*)",
+      "Bash(wc:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

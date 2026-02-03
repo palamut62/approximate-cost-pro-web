@@ -5,6 +5,7 @@ import os
 import time
 import logging
 from typing import Dict, Any, Optional
+from services.settings_service import get_settings_service
 
 # Logger setup
 logger = logging.getLogger("ai_service")
@@ -21,14 +22,20 @@ class APIError(Exception):
 
 class AIAnalysisService:
     def __init__(self,
-                 openrouter_key: Optional[str] = None,
                  gemini_key: Optional[str] = None,
-                 model: str = "google/gemini-2.0-flash-001",
+                 model: str = None, # Dynamic from settings
                  base_url: str = "https://openrouter.ai/api/v1"):
         self.openrouter_key = openrouter_key or os.getenv("OPENROUTER_API_KEY")
-        self.gemini_key = gemini_key or os.getenv("GEMINI_API_KEY")
-        self.model = model
+        self.gemini_key = None # GEMINI DISABLED BY USER REQUEST
+        self.settings_service = get_settings_service()
+        self.model = model # If override provided, use it, else dynamic
         self.base_url = base_url
+
+    def get_model(self, task: str = "analyze") -> str:
+        """Get model ID from settings unless manually overridden"""
+        if self.model:
+            return self.model
+        return self.settings_service.get_model_for_task(task)
 
     def refine_feedback_description(self, text: str) -> str:
         """Kullanıcının girdiği düzeltme metnini profesyonel bir dile çevirir."""
@@ -57,7 +64,7 @@ TALİMAT:
                     "Content-Type": "application/json"
                 }
                 data = {
-                    "model": self.model,
+                    "model": self.get_model("refine"),
                     "messages": messages,
                     "temperature": 0.3
                 }
@@ -67,18 +74,8 @@ TALİMAT:
             except Exception as e:
                 print(f"Refine Error (OpenRouter): {e}")
 
-        if self.gemini_key:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
-                data = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"temperature": 0.3}
-                }
-                response = requests.post(url, json=data, timeout=30)
-                response.raise_for_status()
-                return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
             except Exception as e:
-                print(f"Refine Error (Gemini): {e}")
+                print(f"Refine Error (OpenRouter): {e}")
 
         return text # Hata durumunda orijinali döndür
 
@@ -136,7 +133,7 @@ KURALLAR:
                     "Content-Type": "application/json"
                 }
                 data = {
-                    "model": self.model,
+                    "model": self.get_model("refine"),
                     "messages": messages,
                     "temperature": 0.4
                 }
@@ -146,18 +143,7 @@ KURALLAR:
             except Exception as e:
                 print(f"Refine Request Error (OpenRouter): {e}")
 
-        if self.gemini_key:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
-                data = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"temperature": 0.4}
-                }
-                response = requests.post(url, json=data, timeout=30)
-                response.raise_for_status()
-                return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            except Exception as e:
-                print(f"Refine Request Error (Gemini): {e}")
+
 
         return text  # Hata durumunda orijinali döndür
 
@@ -230,7 +216,7 @@ Eğer analiz MÜKEMMEL ise "issues" listesini boş bırak ve status="ok" döndü
                      "X-Title": "Approximate Cost Pro"
                 }
                 data = {
-                    "model": self.model, # "google/gemini-2.0-flash-001" usually
+                    "model": self.get_model("critic"), 
                     "messages": [
                         {"role": "system", "content": "Sen hata affetmeyen, titiz bir Başmühendissin. JSON formatında yanıt verirsin."},
                         {"role": "user", "content": prompt}
@@ -246,29 +232,31 @@ Eğer analiz MÜKEMMEL ise "issues" listesini boş bırak ve status="ok" döndü
                 errors.append(f"OpenRouter Critic Error: {e}")
 
         # Try Gemini (LLM call)
-        if self.gemini_key:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
-                data = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}
-                }
-                logger.info("LLM Critic (Gemini) çağrılıyor...")
-                response = requests.post(url, json=data, timeout=60)
-                response.raise_for_status()
-                content = response.json()['candidates'][0]['content']['parts'][0]['text']
-                return self._process_response(content)
             except Exception as e:
-                errors.append(f"Gemini Critic Error: {e}")
+                errors.append(f"OpenRouter Critic Error: {e}")
 
         # If LLM fails, return empty result (let rule-based system handle it)
         print(f"LLM Critic Failed: {errors}")
         return {"status": "ok", "issues": [], "general_comment": "LLM servisi yanıt vermedi, yerel kurallar geçerli."}
 
-    def generate_analysis(self, description: str, unit: str, context_data: str = "") -> Dict[str, Any]:
+    def generate_analysis(
+        self,
+        description: str,
+        unit: str,
+        context_data: str = "",
+        model: str = None,
+        temperature: float = None
+    ) -> Dict[str, Any]:
         """
         Analiz oluşturma ana fonksiyonu.
         Retry mekanizması ve fallback desteği ile.
+
+        Args:
+            description: İmalat tanımı
+            unit: Birim (m, m², m³, adet, vb.)
+            context_data: RAG context verisi
+            model: Kullanılacak model (None ise varsayılan)
+            temperature: LLM temperature (None ise varsayılan 0.1)
         """
         prompt = self._build_professional_prompt(description, unit, context_data)
         errors = []
@@ -278,7 +266,7 @@ Eğer analiz MÜKEMMEL ise "issues" listesini boş bırak ve status="ok" döndü
             for attempt in range(3):
                 try:
                     logger.info(f"OpenRouter API çağrısı (deneme {attempt + 1}/3)")
-                    return self._call_openrouter(prompt)
+                    return self._call_openrouter(prompt, model=model, temperature=temperature)
                 except APIError as e:
                     errors.append(f"OpenRouter: {e}")
                     if e.retryable and attempt < 2:
@@ -293,20 +281,7 @@ Eğer analiz MÜKEMMEL ise "issues" listesini boş bırak ve status="ok" döndü
                     break
 
         # Fallback to Gemini if key exists (with retry)
-        if self.gemini_key:
-            for attempt in range(2):
-                try:
-                    logger.info(f"Gemini API çağrısı (fallback, deneme {attempt + 1}/2)")
-                    return self._call_gemini(prompt)
-                except APIError as e:
-                    errors.append(f"Gemini: {e}")
-                    if e.retryable and attempt < 1:
-                        time.sleep(2)
-                        continue
-                    break
-                except Exception as e:
-                    errors.append(f"Gemini: {e}")
-                    logger.error(f"Gemini hatası: {e}")
+                    logger.error(f"OpenRouter hatası: {e}")
                     break
 
         # All providers failed
@@ -648,7 +623,7 @@ Not:
 • Fiyatları 2 ondalık basamakla yaz
 • JSON dışında hiçbir şey yazma"""
 
-    def _call_openrouter(self, prompt: str) -> Dict[str, Any]:
+    def _call_openrouter(self, prompt: str, model: str = None, temperature: float = None) -> Dict[str, Any]:
         headers = {
             "Authorization": f"Bearer {self.openrouter_key}",
             "Content-Type": "application/json",
@@ -656,7 +631,7 @@ Not:
             "X-Title": "Approximate Cost Pro"
         }
         data = {
-            "model": self.model,
+            "model": model or self.get_model("analyze"),
             "messages": [
                 {
                     "role": "system",
@@ -667,7 +642,7 @@ Not:
                     "content": prompt
                 }
             ],
-            "temperature": 0.1,
+            "temperature": temperature if temperature is not None else 0.1,
             "max_tokens": 4000
         }
 
@@ -676,10 +651,10 @@ Not:
                 f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=data,
-                timeout=90
+                timeout=120
             )
         except requests.exceptions.Timeout:
-            raise APIError("İstek zaman aşımına uğradı (90s)", "OpenRouter", retryable=True)
+            raise APIError("İstek zaman aşımına uğradı (120s)", "OpenRouter", retryable=True)
         except requests.exceptions.ConnectionError:
             raise APIError("Bağlantı hatası", "OpenRouter", retryable=True)
 
@@ -693,45 +668,20 @@ Not:
         elif response.status_code >= 500:
             raise APIError(f"Sunucu hatası ({response.status_code})", "OpenRouter", response.status_code, retryable=True)
         elif response.status_code >= 400:
-            raise APIError(f"İstek hatası ({response.status_code})", "OpenRouter", response.status_code, retryable=False)
+            error_detail = response.text
+            try:
+                error_detail = response.json()
+            except:
+                pass
+            raise APIError(f"İstek hatası ({response.status_code}): {error_detail}", "OpenRouter", response.status_code, retryable=False)
 
         response.raise_for_status()
-        content = response.json()['choices'][0]['message']['content']
+        resp_json = response.json()
+        logger.debug(f"OpenRouter Response: {json.dumps(resp_json)[:1000]}...") # Log first 1000 chars
+        content = resp_json['choices'][0]['message']['content']
         return self._process_response(content)
 
-    def _call_gemini(self, prompt: str) -> Dict[str, Any]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
-        data = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "responseMimeType": "application/json",
-                "temperature": 0.1,
-                "maxOutputTokens": 4000
-            }
-        }
 
-        try:
-            response = requests.post(url, json=data, timeout=120)
-        except requests.exceptions.Timeout:
-            raise APIError("İstek zaman aşımına uğradı (120s)", "Gemini", retryable=True)
-        except requests.exceptions.ConnectionError:
-            raise APIError("Bağlantı hatası", "Gemini", retryable=True)
-
-        # Handle HTTP errors
-        if response.status_code == 429:
-            raise APIError("Rate limit aşıldı", "Gemini", 429, retryable=True)
-        elif response.status_code == 401 or response.status_code == 403:
-            raise APIError("API anahtarı geçersiz veya yetkisiz", "Gemini", response.status_code, retryable=False)
-        elif response.status_code == 503:
-            raise APIError("Servis geçici olarak kullanılamıyor", "Gemini", 503, retryable=True)
-        elif response.status_code >= 500:
-            raise APIError(f"Sunucu hatası ({response.status_code})", "Gemini", response.status_code, retryable=True)
-        elif response.status_code >= 400:
-            raise APIError(f"İstek hatası ({response.status_code})", "Gemini", response.status_code, retryable=False)
-
-        response.raise_for_status()
-        content = response.json()['candidates'][0]['content']['parts'][0]['text']
-        return self._process_response(content)
 
     def _process_response(self, content: str) -> Dict[str, Any]:
         """JSON temizleme ve onarma"""
@@ -754,15 +704,17 @@ Not:
 
             try:
                 return self._finalize_data(json.loads(json_str, strict=False))
-            except json.JSONDecodeError as e:
+            except Exception as e:
                 # JSON onarma dene
                 repaired = self._repair_json(json_str)
                 try:
                     return self._finalize_data(json.loads(repaired, strict=False))
-                except:
-                    raise Exception(f"AI yanıtı geçerli JSON'a dönüştürülemedi: {str(e)}")
+                except Exception as json_err:
+                    logger.error(f"JSON Decode Error. Raw content:\n{content}")
+                    raise Exception(f"AI yanıtı geçerli JSON'a dönüştürülemedi: {str(json_err)} | RAW: {content[:500]}...")
 
-        raise Exception(f"AI yanıtında JSON bulunamadı: {content[:200]}...")
+        logger.error(f"No JSON found in response. Raw content:\n{content}")
+        raise Exception(f"AI yanıtında JSON bulunamadı: {content[:500]}...")
 
     def _clean_control_characters(self, json_str: str) -> str:
         """JSON string içindeki geçersiz kontrol karakterlerini temizle"""

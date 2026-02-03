@@ -301,6 +301,20 @@ class DatabaseManager:
         conn.close()
         return True
 
+    def rename_project(self, project_id, new_name):
+        """Sadece proje adını güncelle"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+        cursor.execute('UPDATE projects SET name = ?, updated_date = ? WHERE id = ?', 
+                       (new_name, now, project_id))
+        
+        row_count = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return row_count > 0
+
     def get_project(self, project_id):
         conn = self.get_connection()
         cursor = conn.cursor()
@@ -795,6 +809,31 @@ class DatabaseManager:
         results = [dict(zip(columns, row)) for row in cursor.fetchall()]
         conn.close()
         return results
+
+    def get_dashboard_stats(self):
+        """Dashboard için özet istatistikleri getir"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        
+        stats = {}
+        
+        # 1. Toplam Poz Sayısı (Project Items + Custom Analyses)
+        cursor.execute("SELECT COUNT(*) FROM project_items")
+        p_items = cursor.fetchone()[0]
+        cursor.execute("SELECT COUNT(*) FROM custom_analyses")
+        c_items = cursor.fetchone()[0]
+        stats['item_count'] = p_items + c_items
+        
+        # 2. Dosya Sayısı
+        cursor.execute("SELECT COUNT(*) FROM pdf_sources")
+        stats['file_count'] = cursor.fetchone()[0]
+        
+        # 3. Proje Sayısı
+        cursor.execute("SELECT COUNT(*) FROM projects")
+        stats['project_count'] = cursor.fetchone()[0]
+        
+        conn.close()
+        return stats
         
     def delete_quantity_takeoff(self, takeoff_id):
         conn = self.get_connection()

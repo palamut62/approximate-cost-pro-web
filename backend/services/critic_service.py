@@ -89,8 +89,10 @@ class CriticService:
         # 4. Fiyat anomalileri
         all_issues.extend(self.check_price_deviation(analysis_result, description))
         
-        # 5. Genel eksik kontroller
+        # 5. Genel eksik ve mantık kontrolleri
         all_issues.extend(self.check_missing_labor(components))
+        all_issues.extend(self.check_plain_concrete_no_rebar(components, description))
+        all_issues.extend(self.check_ready_mix_consistency(components, description))
 
         # 6. Kullanıcı Tanımlı Kurallar (Öğrenen AI)
         all_issues.extend(self.check_user_rules(components, description))
@@ -289,6 +291,74 @@ class CriticService:
         
         return issues
     
+    def check_plain_concrete_no_rebar(self, components: List[Dict], description: str) -> List[Issue]:
+        """Yalın betonda demir olmamalı"""
+        issues = []
+        desc_lower = description.lower()
+        
+        # Yalın beton tespiti
+        # "beton" var, "betonarme" yok, "döşeme" veya "temel" olabilir ama "betonarme" denmemiş
+        is_plain_concrete = (
+            'beton' in desc_lower and
+            'betonarme' not in desc_lower and
+            'donatı' not in desc_lower and
+            'hasır' not in desc_lower and
+            'demir' not in desc_lower
+        )
+        
+        if not is_plain_concrete:
+            return issues
+        
+        # Demir var mı kontrol et
+        has_steel = any(
+            any(kw in c.get('name', '').lower() for kw in ['demir', 'çelik', 'donatı', 's420', 's500'])
+            for c in components
+        )
+        
+        if has_steel:
+            issues.append(Issue(
+                severity="critical",
+                category="Mantık Hatası",
+                message="YALIN BETON imalatında demir/donatı bulunmamalıdır.",
+                suggestion="Yalın beton sadece beton ve kalıptan oluşur (bazen kalıp da olmaz). Demir kalemini çıkarın."
+            ))
+        
+        return issues
+        
+    def check_ready_mix_consistency(self, components: List[Dict], description: str) -> List[Issue]:
+        """Hazır betonda çimento/kum/çakıl ayrı olmamalı"""
+        issues = []
+        desc_lower = description.lower()
+        
+        # Hazır beton/santral tespiti
+        is_ready_mix = any(kw in desc_lower for kw in ['santral', 'hazır beton', 'pompa ile', 'transmikser'])
+        
+        has_ready_mix_comp = any(
+            'hazır beton' in c.get('name', '').lower() or 
+            str(c.get('code', '')).startswith('15.150') 
+            for c in components
+        )
+        
+        if not is_ready_mix and not has_ready_mix_comp:
+            return issues
+        
+        # Çimento/kum/çakıl var mı?
+        aggregates = ['çimento', 'kum', 'çakıl', 'agrega']
+        has_aggregate = any(
+            any(agg in c.get('name', '').lower() for agg in aggregates)
+            for c in components if c.get('type') == 'Malzeme'
+        )
+        
+        if has_aggregate:
+            issues.append(Issue(
+                severity="critical",
+                category="Mükerrer Malzeme",
+                message="HAZIR BETON imalatında çimento/kum/çakıl ayrıca YAZILMAZ.",
+                suggestion="Hazır beton zaten bu bileşenleri içerir. Agrega ve çimento kalemlerini silin."
+            ))
+            
+        return issues
+
     def check_missing_labor(self, components: List[Dict]) -> List[Issue]:
         """İşçilik eksikliği kontrol et"""
         issues = []

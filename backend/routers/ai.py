@@ -1,6 +1,10 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from services.ai_service import AIAnalysisService
+from services.consensus_service import ConsensusAnalysisService
+from services.self_consistency_service import SelfConsistencyService
+from services.cot_service import ChainOfThoughtService
 from difflib import SequenceMatcher
 from typing import List, Dict, Any, Optional
 from database import DatabaseManager
@@ -9,6 +13,7 @@ from config import get_analysis_config, get_price_config, get_validation_config
 from utils.logger import get_ai_logger, get_price_logger, get_validation_logger
 import json
 import uuid
+import asyncio
 from datetime import datetime
 import threading
 from services.description_parser import extract_included_services, should_exclude_component
@@ -42,6 +47,9 @@ class AnalysisRequest(BaseModel):
     description: str
     unit: str
     context_data: str = ""
+    use_consensus: bool = False
+    use_self_consistency: bool = False
+    use_cot: bool = False
 
 
 class RefineRequest(BaseModel):
@@ -130,10 +138,25 @@ def run_analysis_job(job_id: str, description: str, unit: str, context_data: str
         print(f"[JOB {job_id[:8]}] ❌ Analiz hatası: {error_msg}")
 
 
-def perform_analysis_sync(description: str, unit: str, context_data: str = "") -> Dict[str, Any]:
+def perform_analysis_sync(
+    description: str,
+    unit: str,
+    context_data: str = "",
+    use_consensus: bool = False,
+    use_self_consistency: bool = False,
+    use_cot: bool = False
+) -> Dict[str, Any]:
     """
     Senkron analiz işlemi.
     analyze_poz endpoint'inin mantığını içerir.
+
+    Args:
+        description: İmalat tanımı
+        unit: Birim
+        context_data: Ek context verisi
+        use_consensus: Çoklu model konsensüs modu
+        use_self_consistency: Self-consistency modu
+        use_cot: Chain-of-Thought modu
     """
     service = AIAnalysisService()
     training_service = get_training_service()
@@ -277,8 +300,59 @@ def perform_analysis_sync(description: str, unit: str, context_data: str = "") -
     # Context'leri birleştir (limit kontrolü ile)
     full_context = merge_contexts(poz_context, feedback_context, training_rag_context)
 
-    # AI analizi al
-    result = service.generate_analysis(description, unit, full_context)
+    # AI analizi al (gelişmiş modlar dahil)
+    advanced_metrics = {}
+
+    if use_consensus:
+        # Çoklu model konsensüs modu
+        try:
+            consensus_service = ConsensusAnalysisService(service)
+            result = asyncio.run(consensus_service.analyze_with_consensus(
+                description, unit, full_context
+            ))
+            advanced_metrics["consensus_score"] = result.get("consensus_score", 0)
+            advanced_metrics["model_count"] = result.get("model_count", 0)
+            logger.info(f"Consensus analiz tamamlandı. Skor: {advanced_metrics['consensus_score']:.2f}")
+        except Exception as e:
+            logger.warning(f"Consensus analiz hatası, standart moda dönülüyor: {e}")
+            result = service.generate_analysis(description, unit, full_context)
+
+    elif use_self_consistency:
+        # Self-consistency modu
+        try:
+            consistency_service = SelfConsistencyService(service, n_samples=3)
+            result = asyncio.run(consistency_service.analyze_with_consistency(
+                description, unit, full_context
+            ))
+            advanced_metrics["consistency_score"] = result.get("consistency_score", 0)
+            advanced_metrics["sample_count"] = result.get("sample_count", 0)
+            if result.get("warning"):
+                advanced_metrics["consistency_warning"] = result.get("warning")
+            logger.info(f"Self-consistency analiz tamamlandı. Skor: {advanced_metrics['consistency_score']:.2f}")
+        except Exception as e:
+            logger.warning(f"Self-consistency analiz hatası, standart moda dönülüyor: {e}")
+            result = service.generate_analysis(description, unit, full_context)
+
+    elif use_cot:
+        # Chain-of-Thought modu (prompt genişletme)
+        try:
+            cot_service = ChainOfThoughtService()
+            cot_prompt = cot_service.build_cot_prompt(description, unit, full_context)
+            # CoT prompt'u ile standart servis çağır (temperature biraz yüksek)
+            result = service.generate_analysis(description, unit, cot_prompt, temperature=0.15)
+            advanced_metrics["cot_enabled"] = True
+            logger.info("Chain-of-Thought analiz tamamlandı.")
+        except Exception as e:
+            logger.warning(f"CoT analiz hatası, standart moda dönülüyor: {e}")
+            result = service.generate_analysis(description, unit, full_context)
+
+    else:
+        # Standart mod
+        result = service.generate_analysis(description, unit, full_context)
+
+    # Advanced metrics'i result'a ekle
+    if advanced_metrics:
+        result["advanced_metrics"] = advanced_metrics
 
     # Validasyonlar
     exclusions = check_exclusions(description)
@@ -1949,41 +2023,6 @@ def calculate_confidence_score(components: List[Dict], description: str) -> int:
     }
 
 
-def detect_price_anomalies(components: List[Dict]) -> List[str]:
-    """
-    Anormal fiyatları tespit et ve uyarı listesi döndür.
-    
-    Anomaliler:
-    - Fiyatı 0 olan kalemler
-    - Çok yüksek birim fiyatlı kalemler (>100.000 TL)
-    - AI tarafından tahmin edilen ama POZ'da bulunmayan kalemler
-    """
-    warnings = []
-    
-    for comp in components:
-        name = comp.get('name', 'Bilinmeyen')
-        unit_price = comp.get('unit_price', 0)
-        source = comp.get('price_source', 'not_found')
-        
-        # Uyarı 1: Fiyat bulunamadı
-        if unit_price == 0:
-            warnings.append(f"⚠️ '{name}' kalemi için fiyat bulunamadı (0 TL)")
-        
-        # Uyarı 2: Çok yüksek fiyat
-        elif unit_price > 100000:
-            warnings.append(f"⚠️ '{name}' çok yüksek fiyatlı ({unit_price:,.2f} TL). Lütfen kontrol edin.")
-        
-        # Uyarı 3: AI tahmini fiyat
-        elif source == 'ai_generated' and unit_price > 0:
-            warnings.append(f"ℹ️ '{name}' AI tarafından tahmin edildi ({unit_price:,.2f} TL). Doğruluğu kontrol edin.")
-        
-        # Uyarı 4: Fiyat kaynak belirtilmemiş
-        elif source == 'not_found' and unit_price > 0:
-            warnings.append(f"⚠️ '{name}' fiyat kaynağı belirsiz")
-    
-    return warnings
-
-
 @router.post("/analyze")
 async def analyze_poz(request: AnalysisRequest):
     """
@@ -2165,12 +2204,88 @@ async def analyze_poz(request: AnalysisRequest):
         if request.context_data:
             full_context += "\n\nKULLANICI EK BİLGİLERİ:\n" + request.context_data
 
-        # 2.5. AI analizini al (zenginleştirilmiş context ile)
-        result = service.generate_analysis(
-            description=request.description,
-            unit=request.unit,
-            context_data=full_context
-        )
+        # 2.5. AI analizini al (zenginleştirilmiş context ile, gelişmiş modlar dahil)
+        advanced_metrics = {}
+
+        if request.use_consensus:
+            # Çoklu model konsensüs modu
+            try:
+                consensus_service = ConsensusAnalysisService(service)
+                result = asyncio.get_event_loop().run_until_complete(
+                    consensus_service.analyze_with_consensus(
+                        request.description, request.unit, full_context
+                    )
+                )
+                advanced_metrics["consensus_score"] = result.get("consensus_score", 0)
+                advanced_metrics["model_count"] = result.get("model_count", 0)
+                logger.info(f"Consensus analiz tamamlandı. Skor: {advanced_metrics.get('consensus_score', 0):.2f}")
+            except Exception as e:
+                logger.warning(f"Consensus analiz hatası, standart moda dönülüyor: {e}")
+                result = await run_in_threadpool(
+                    service.generate_analysis,
+                    description=request.description,
+                    unit=request.unit,
+                    context_data=full_context
+                )
+
+        elif request.use_self_consistency:
+            # Self-consistency modu
+            try:
+                consistency_service = SelfConsistencyService(service, n_samples=3)
+                result = asyncio.get_event_loop().run_until_complete(
+                    consistency_service.analyze_with_consistency(
+                        request.description, request.unit, full_context
+                    )
+                )
+                advanced_metrics["consistency_score"] = result.get("consistency_score", 0)
+                advanced_metrics["sample_count"] = result.get("sample_count", 0)
+                if result.get("warning"):
+                    advanced_metrics["consistency_warning"] = result.get("warning")
+                logger.info(f"Self-consistency analiz tamamlandı. Skor: {advanced_metrics.get('consistency_score', 0):.2f}")
+            except Exception as e:
+                logger.warning(f"Self-consistency analiz hatası, standart moda dönülüyor: {e}")
+                result = await run_in_threadpool(
+                    service.generate_analysis,
+                    description=request.description,
+                    unit=request.unit,
+                    context_data=full_context
+                )
+
+        elif request.use_cot:
+            # Chain-of-Thought modu
+            try:
+                cot_service = ChainOfThoughtService()
+                cot_prompt = cot_service.build_cot_prompt(request.description, request.unit, full_context)
+                result = await run_in_threadpool(
+                    service.generate_analysis,
+                    description=request.description,
+                    unit=request.unit,
+                    context_data=cot_prompt,
+                    temperature=0.15
+                )
+                advanced_metrics["cot_enabled"] = True
+                logger.info("Chain-of-Thought analiz tamamlandı.")
+            except Exception as e:
+                logger.warning(f"CoT analiz hatası, standart moda dönülüyor: {e}")
+                result = await run_in_threadpool(
+                    service.generate_analysis,
+                    description=request.description,
+                    unit=request.unit,
+                    context_data=full_context
+                )
+
+        else:
+            # Standart mod
+            result = await run_in_threadpool(
+                service.generate_analysis,
+                description=request.description,
+                unit=request.unit,
+                context_data=full_context
+            )
+
+        # Advanced metrics'i result'a ekle
+        if advanced_metrics:
+            result["advanced_metrics"] = advanced_metrics
 
         # 2.6. Validasyon (Çoklu katman)
         if "components" in result:
@@ -2192,10 +2307,7 @@ async def analyze_poz(request: AnalysisRequest):
         # 3.1. Genel İnşaat Kuralları Validasyonu (Kazı->Nakliye, Duvar->Harç vb.)
         result["components"] = validate_general_construction_rules(result["components"], request.description)
 
-        # 3.2. Fiyat Anomali Tespiti
-        price_warnings = detect_price_anomalies(result["components"])
-        
-        # 3.3. Güven Skoru Hesaplama
+        # 3.2. Güven Skoru Hesaplama
         confidence_data = calculate_confidence_score(result["components"], request.description)
 
         # 2.8. AI'dan önerilen birimi kullan (giriş birimi yerine)
@@ -2215,9 +2327,9 @@ async def analyze_poz(request: AnalysisRequest):
             "feedback_used": bool(feedback_context),
             "training_rag_used": bool(training_rag_context),
             "price_sources": summarize_price_sources(result),
-            "analysis_score": confidence_data["score"], # 0-100 arası puan
-            "confidence_level": confidence_data["level"], # High, Medium, Low
-            "warnings": price_warnings,
+            "analysis_score": confidence_data["score"],
+            "confidence_level": confidence_data["level"],
+            "warnings": [],  # Critic review sonrasında doldurulacak
             "input_unit": request.unit,
             "suggested_unit": suggested_unit
         }
@@ -2227,10 +2339,10 @@ async def analyze_poz(request: AnalysisRequest):
         # CRITIC REVIEW: Eleştirmen AI Kontrolü
         # ========================================
         from services.critic_service import get_critic_service
-        
+
         critic = get_critic_service()
-        critic_review = critic.review_analysis(result, request.description)
-        
+        critic_review = await run_in_threadpool(critic.review_analysis, result, request.description)
+
         # Critic sonuçlarını result'a ekle
         result["critic_review"] = {
             "status": critic_review.status,
@@ -2245,25 +2357,13 @@ async def analyze_poz(request: AnalysisRequest):
             ],
             "suggestions": critic_review.suggestions
         }
-        
-        # Kritik hatalar varsa uyarılara ekle
-        if critic_review.status == "error":
-            critical_warnings = [
-                f"🔴 KRİTİK: {issue.message}"
-                for issue in critic_review.issues
-                if issue.severity == "critical"
-            ]
-            result["metadata"]["warnings"].extend(critical_warnings)
-        
-        # Warning seviyesindeki sorunlar
-        elif critic_review.status == "warning":
-            warning_messages = [
-                f"⚠️ {issue.message}"
-                for issue in critic_review.issues
-                if issue.severity == "warning"
-            ]
-            result["metadata"]["warnings"].extend(warning_messages)
 
+        # Tüm critic issue'larını warnings'a ekle (severity'ye göre formatla)
+        for issue in critic_review.issues:
+            if issue.severity == "critical":
+                result["metadata"]["warnings"].append(f"🔴 KRİTİK: {issue.message}")
+            elif issue.severity == "warning":
+                result["metadata"]["warnings"].append(f"⚠️ {issue.message}")
 
         return result
 

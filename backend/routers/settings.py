@@ -1,44 +1,52 @@
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, HTTPException, Depends
+from typing import Dict, Any, List
 from pydantic import BaseModel
-from database import DatabaseManager
-from pathlib import Path
-from typing import Dict, Any, List, Optional
 
-router = APIRouter(prefix="/settings", tags=["Settings"])
-db = DatabaseManager(str(Path(__file__).parent.parent.parent / "data.db"))
+from services.settings_service import get_settings_service
 
-class SettingUpdate(BaseModel):
-    key: str
-    value: str
+router = APIRouter(
+    prefix="/settings",
+    tags=["Ayarlar"]
+)
 
-class SettingsBatchUpdate(BaseModel):
-    settings: Dict[str, str]
+class SettingsUpdate(BaseModel):
+    selected_models: Dict[str, str] = {}
+    filter_free_only: bool = False
 
-@router.get("/")
-def get_all_settings():
-    """Tüm ayarları getir"""
-    conn = db.get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT key, value FROM settings")
-    settings = dict(cursor.fetchall())
-    conn.close()
-    return settings
+@router.get("")
+async def get_settings():
+    """Get all current settings including cached models"""
+    service = get_settings_service()
+    return service.get_settings()
 
-@router.get("/{key}")
-def get_setting(key: str):
-    """Belirli bir ayarı getir"""
-    value = db.get_setting(key)
-    return {"key": key, "value": value}
+@router.post("")
+async def update_settings(settings: SettingsUpdate):
+    """Update settings"""
+    service = get_settings_service()
+    
+    # Convert Pydantic model to dict, filtering out unset values if minimal update is desired,
+    # or just passing full dict. Here we merge with existing.
+    update_data = {}
+    if settings.selected_models:
+        update_data["selected_models"] = settings.selected_models
+    
+    update_data["filter_free_only"] = settings.filter_free_only
+    
+    return service.update_settings(update_data)
 
-@router.post("/")
-def update_setting(update: SettingUpdate):
-    """Tek bir ayarı güncelle"""
-    db.set_setting(update.key, update.value)
-    return {"message": "Setting updated", "key": update.key, "value": update.value}
+@router.post("/refresh-models")
+async def refresh_models():
+    """Force refresh available AI models from OpenRouter"""
+    service = get_settings_service()
+    try:
+        models = service.refresh_openrouter_models()
+        return {"status": "ok", "count": len(models), "models": models}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/batch")
-def update_settings_batch(update: SettingsBatchUpdate):
-    """Toplu ayar güncelleme"""
-    for key, value in update.settings.items():
-        db.set_setting(key, value)
-    return {"message": f"{len(update.settings)} settings updated"}
+@router.get("/models")
+async def get_cached_models():
+    """Get only the cached models list"""
+    service = get_settings_service()
+    settings = service.get_settings()
+    return settings.get("cached_models", [])
