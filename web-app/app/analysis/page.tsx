@@ -119,8 +119,15 @@ export default function AnalysisPage() {
             // AI isteğinden sonra kullanım verilerini güncelle
             refetchLLMUsage();
         } catch (e: any) {
-            console.error(e);
-            showNotification("Analiz sırasında bir hata oluştu: " + (e.response?.data?.detail || e.message), "error");
+            console.error("AI Analyze Error:", e);
+            console.error("Error details:", {
+                message: e.message,
+                code: e.code,
+                response: e.response?.data,
+                status: e.response?.status,
+                config: e.config
+            });
+            showNotification("Analiz sırasında bir hata oluştu: " + (e.response?.data?.detail || e.message || e.code), "error");
         } finally {
             setLoading(false);
         }

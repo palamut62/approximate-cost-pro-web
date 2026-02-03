@@ -4,6 +4,10 @@ from sentence_transformers import SentenceTransformer
 import os
 from typing import List, Dict, Any, Optional
 import threading
+from utils.logger import get_vector_logger
+
+logger = get_vector_logger()
+base_logger = logger # Alias for consistency if needed
 
 class VectorDBService:
     _instance = None
@@ -21,7 +25,7 @@ class VectorDBService:
         if self._initialized:
             return
 
-        print("[VECTOR_DB] Servis başlatılıyor (lazy mode)...")
+        logger.info("[VECTOR_DB] Servis başlatılıyor (lazy mode)...")
 
         # CUDA hatasını önlemek için CPU kullanımını zorla
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -39,7 +43,7 @@ class VectorDBService:
         self._pending_data: Optional[List[Dict]] = None
 
         self._initialized = True
-        print("[VECTOR_DB] Servis hazır (model henüz yüklenmedi).")
+        logger.info("[VECTOR_DB] Servis hazır (model henüz yüklenmedi).")
 
     def _ensure_model_loaded(self):
         """Model'i lazy olarak yükle"""
@@ -50,7 +54,7 @@ class VectorDBService:
             if self._model_loaded:
                 return True
 
-            print("[VECTOR_DB] Embedding modeli yükleniyor (CPU modunda)...")
+            logger.info("[VECTOR_DB] Embedding modeli yükleniyor (CPU modunda)...")
             try:
                 # Türkçe destekli model
                 self.model = SentenceTransformer('emrecan/bert-base-turkish-cased-mean-nli-stsb-tr', device='cpu')
@@ -64,10 +68,10 @@ class VectorDBService:
                     metadata={"hnsw:space": "cosine"}
                 )
                 self._model_loaded = True
-                print(f"[VECTOR_DB] Model yüklendi. Mevcut belge: {self.collection.count()}")
+                logger.info(f"[VECTOR_DB] Model yüklendi. Mevcut belge: {self.collection.count()}")
                 return True
             except Exception as e:
-                print(f"[VECTOR_DB] Model yüklenemedi: {e}")
+                logger.error(f"[VECTOR_DB] Model yüklenemedi: {e}")
                 return False
 
     def is_ready(self) -> bool:
@@ -89,14 +93,14 @@ class VectorDBService:
     def lazy_ingest(self, poz_data: List[Dict[str, Any]]):
         """Arka planda ingestion başlat (non-blocking)"""
         if self._ingestion_started:
-            print("[VECTOR_DB] Ingestion zaten başlamış, atlanıyor.")
+            logger.warning("[VECTOR_DB] Ingestion zaten başlamış, atlanıyor.")
             return
 
         self._ingestion_started = True
         self._pending_data = poz_data
 
         def _background_ingest():
-            print("[VECTOR_DB] Arka plan ingestion başlıyor...")
+            logger.info("[VECTOR_DB] Arka plan ingestion başlıyor...")
             self._ensure_model_loaded()
             if self.model:
                 self.ingest_data(self._pending_data)
@@ -105,7 +109,7 @@ class VectorDBService:
 
         thread = threading.Thread(target=_background_ingest, daemon=True)
         thread.start()
-        print(f"[VECTOR_DB] Arka plan ingestion başlatıldı ({len(poz_data)} poz).")
+        logger.info(f"[VECTOR_DB] Arka plan ingestion başlatıldı ({len(poz_data)} poz).")
 
     def ingest_data(self, poz_data: List[Dict[str, Any]]):
         """
@@ -113,15 +117,15 @@ class VectorDBService:
         Zaten varsa atlar (basit kontrol).
         """
         if not self.model:
-            print("[VECTOR_DB] Model yüklü değil, ingestion iptal.")
+            logger.warning("[VECTOR_DB] Model yüklü değil, ingestion iptal.")
             return
 
         current_count = self.collection.count()
         if current_count >= len(poz_data) * 0.9:
-            print(f"[VECTOR_DB] Veri zaten yüklü görünüyor ({current_count} belge). İşlem atlandı.")
+            logger.info(f"[VECTOR_DB] Veri zaten yüklü görünüyor ({current_count} belge). İşlem atlandı.")
             return
 
-        print(f"[VECTOR_DB] {len(poz_data)} poz için ingestion başlıyor...")
+        logger.info(f"[VECTOR_DB] {len(poz_data)} poz için ingestion başlıyor...")
         
         batch_size = 500
         total_batches = (len(poz_data) + batch_size - 1) // batch_size
@@ -163,15 +167,15 @@ class VectorDBService:
                         documents=documents,
                         metadatas=metadatas
                     )
-                    print(f"[VECTOR_DB] Batch {idx // batch_size + 1}/{total_batches} tamamlandı.")
+                    logger.info(f"[VECTOR_DB] Batch {idx // batch_size + 1}/{total_batches} tamamlandı.")
                 except Exception as e:
-                    print(f"[VECTOR_DB] Batch hatası: {e}")
+                    logger.error(f"[VECTOR_DB] Batch hatası: {e}")
                 
                 ids = []
                 documents = []
                 metadatas = []
 
-        print("[VECTOR_DB] Ingestion tamamlandı.")
+        logger.info("[VECTOR_DB] Ingestion tamamlandı.")
 
     def search(self, query_text: str, n_results: int = 5) -> List[Dict[str, Any]]:
         """
@@ -183,7 +187,7 @@ class VectorDBService:
 
         # Veri yoksa boş dön
         if self.collection.count() == 0:
-            print("[VECTOR_DB] Koleksiyon boş, arama yapılamıyor.")
+            logger.warning("[VECTOR_DB] Koleksiyon boş, arama yapılamıyor.")
             return []
 
         try:
@@ -209,7 +213,7 @@ class VectorDBService:
             return formatted_results
 
         except Exception as e:
-            print(f"[VECTOR_DB] Arama hatası: {e}")
+            logger.error(f"[VECTOR_DB] Arama hatası: {e}")
             return []
 
     def index_feedback(self, feedback_data: Dict[str, Any]):
@@ -231,10 +235,10 @@ class VectorDBService:
                 documents=[doc_text],
                 metadatas=[feedback_data]
             )
-            print(f"[VECTOR_DB] Feedback eklendi: {doc_id}")
+            logger.info(f"[VECTOR_DB] Feedback eklendi: {doc_id}")
             
         except Exception as e:
-            print(f"[VECTOR_DB] Feedback ekleme hatası: {e}")
+            logger.error(f"[VECTOR_DB] Feedback ekleme hatası: {e}")
 
     def search_feedback(self, query_text: str, n_results: int = 3) -> List[Dict[str, Any]]:
         """Benzer geri bildirimleri ara"""
@@ -261,7 +265,7 @@ class VectorDBService:
             return formatted_results
             
         except Exception as e:
-            print(f"[VECTOR_DB] Feedback arama hatası: {e}")
+            logger.error(f"[VECTOR_DB] Feedback arama hatası: {e}")
             return []
 
     def get_count(self) -> int:

@@ -2,6 +2,10 @@ import sqlite3
 import json
 from datetime import datetime
 from pathlib import Path
+from backend.utils.logger import get_db_logger
+
+logger = get_db_logger()
+base_logger = logger
 
 class DatabaseManager:
     def __init__(self, db_path="data.db"):
@@ -619,7 +623,7 @@ class DatabaseManager:
             conn.commit()
             return source_id
         except Exception as e:
-            print(f"PDF source ekleme hatası: {e}")
+            logger.error(f"PDF source ekleme hatası: {e}")
             conn.rollback()
             return None
         finally:
@@ -635,6 +639,7 @@ class DatabaseManager:
                     hash_md5.update(chunk)
             return hash_md5.hexdigest()
         except Exception:
+            logger.error(f"Error calculating hash for file: {file_path}", exc_info=True)
             return None
 
     def get_pdf_sources(self, source_type=None):

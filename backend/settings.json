@@ -1,8 +1,8 @@
 {
   "selected_models": {
-    "analyze": "stepfun/step-3.5-flash:free",
-    "refine": "stepfun/step-3.5-flash:free",
-    "critic": "stepfun/step-3.5-flash:free"
+    "analyze": "moonshotai/kimi-k2.5",
+    "refine": "moonshotai/kimi-k2.5",
+    "critic": "moonshotai/kimi-k2.5"
   },
   "cached_models": [
     {
@@ -3729,5 +3729,5 @@
     }
   ],
   "last_models_refresh": 1770101367.5938506,
-  "filter_free_only": true
+  "filter_free_only": false
 }

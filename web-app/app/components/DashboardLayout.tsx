@@ -16,6 +16,7 @@ const NAV_ITEMS = [
 ];
 
 import { useCart } from '@/context/CartContext';
+import LogTerminal from './LogTerminal';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
@@ -97,6 +98,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     </div>
                 </main>
             </div>
+            <LogTerminal />
         </div>
     );
 }

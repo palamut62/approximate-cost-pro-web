@@ -1,4 +1,5 @@
 import threading
+import logging
 import sys
 import os
 from pathlib import Path
@@ -22,10 +23,19 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from services.data_manager import CSVLoader
 from services.training_data_service import TrainingDataService
-from routers import ai, projects, analyses, feedback, settings, usage, dashboard
+from routers import ai, projects, analyses, feedback, settings, usage, dashboard, logs
 from database import DatabaseManager
 
 app = FastAPI(title="Approximate Cost API", version="1.0.0")
+
+# CORS Setup - MUST be before routers
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # Next.js dev server
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Register Routers
 app.include_router(ai.router, prefix="/api")
@@ -35,15 +45,7 @@ app.include_router(feedback.router, prefix="/api")
 app.include_router(settings.router, prefix="/api")
 app.include_router(usage.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
-
-# CORS Setup
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # For dev only
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.include_router(logs.router, prefix="/api")
 
 # Global Data Cache
 POZ_DATA = {}
@@ -71,6 +73,22 @@ async def startup_event():
     """Start scan on startup"""
     # Run in a separate thread to not block startup
     threading.Thread(target=load_initial_data).start()
+    
+    # Initialize WebSocket Logging Bridge
+    from routers.logs import get_log_handler
+    ws_handler = get_log_handler()
+    
+    # Configure root logger to include WS handler
+    root_logger = logging.getLogger()
+    
+    # Use the same format as defined in config
+    from config import get_log_config
+    config = get_log_config()
+    formatter = logging.Formatter(fmt=config.LOG_FORMAT, datefmt=config.LOG_DATE_FORMAT)
+    ws_handler.setFormatter(formatter)
+    
+    root_logger.addHandler(ws_handler)
+    print("WebSocket Logging Bridge initialized.")
 
 def load_initial_data():
     global POZ_DATA, LOADED_FILES, TRAINING_DATA_SERVICE

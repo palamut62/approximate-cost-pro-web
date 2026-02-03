@@ -51,8 +51,30 @@ def setup_logger(name: str, level: Optional[str] = None) -> logging.Logger:
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
 
-    # Propagation kapatma (duplicate log önleme)
-    logger.propagate = False
+        # WebSocket handler entegrasyonu
+        # main.py'de root logger'a eklendiği için propagate=True ile root'a ulaşacaktır.
+        # Ancak çocuk logger'larda propagate=True bırakmak bazen duplicate loglara sebep olabilir.
+        # En güvenli yol, eğer propagate False olacaksa bile WS handler'ı buraya eklemektir.
+        
+        # Bridge zaten kurulmuş mu kontrol et
+        found_ws = False
+        # Root logger'daki handler'ları tara
+        root_logger = logging.getLogger()
+        for h in root_logger.handlers:
+            if h.__class__.__name__ == 'WebSocketLogHandler':
+                h.setFormatter(formatter)
+                logger.addHandler(h)
+                found_ws = True
+                break
+        
+        # Eğer root'ta yoksa (henüz main.py çalışmadıysa), 
+        # log akışı başladığında eklenebilmesi için propagate=True bırakıyoruz.
+        if found_ws:
+            logger.propagate = False
+        else:
+            logger.propagate = True
+
+    # Propagation durumu yukarıdaki mantığa göre ayarlandığı için burayı kaldırıyoruz
 
     _loggers_cache[name] = logger
     return logger
@@ -74,3 +96,19 @@ def get_price_logger() -> logging.Logger:
 def get_validation_logger() -> logging.Logger:
     """Validasyon için logger"""
     return setup_logger("validation")
+
+def get_db_logger() -> logging.Logger:
+    """Veritabanı işlemleri için logger"""
+    return setup_logger("database")
+
+def get_pdf_logger() -> logging.Logger:
+    """PDF işleme işlemleri için logger"""
+    return setup_logger("pdf_engine")
+
+def get_training_logger() -> logging.Logger:
+    """Eğitim verisi işlemleri için logger"""
+    return setup_logger("training_service")
+
+def get_general_logger() -> logging.Logger:
+    """Genel sistem işlemleri için logger"""
+    return setup_logger("general")

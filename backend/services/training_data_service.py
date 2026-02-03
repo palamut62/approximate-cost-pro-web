@@ -1,7 +1,7 @@
-import json
-from typing import List, Dict, Any, Optional
-from difflib import SequenceMatcher
 from pathlib import Path
+from utils.logger import get_training_logger
+
+logger = get_training_logger()
 
 
 class TrainingDataService:
@@ -24,7 +24,7 @@ class TrainingDataService:
         try:
             path = Path(self.jsonl_path)
             if not path.exists():
-                print(f"⚠️ Training data file not found: {self.jsonl_path}")
+                logger.warning(f"⚠️ Training data file not found: {self.jsonl_path}")
                 return
 
             with open(path, 'r', encoding='utf-8') as f:
@@ -36,12 +36,12 @@ class TrainingDataService:
                         data = json.loads(line)
                         self.training_data.append(data)
                     except json.JSONDecodeError as e:
-                        print(f"⚠️ JSON parse error at line {line_num}: {e}")
+                        logger.warning(f"⚠️ JSON parse error at line {line_num}: {e}")
 
-            print(f"✅ Loaded {len(self.training_data)} training examples from {self.jsonl_path}")
+            logger.info(f"✅ Loaded {len(self.training_data)} training examples from {self.jsonl_path}")
 
         except Exception as e:
-            print(f"❌ Error loading training data: {e}")
+            logger.error(f"❌ Error loading training data: {e}")
             self.training_data = []
 
     def calculate_similarity(self, text1: str, text2: str) -> float:

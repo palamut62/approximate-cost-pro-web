@@ -22,7 +22,7 @@ class APIError(Exception):
 
 class AIAnalysisService:
     def __init__(self,
-                 gemini_key: Optional[str] = None,
+                 openrouter_key: Optional[str] = None,
                  model: str = None, # Dynamic from settings
                  base_url: str = "https://openrouter.ai/api/v1"):
         self.openrouter_key = openrouter_key or os.getenv("OPENROUTER_API_KEY")
@@ -72,10 +72,7 @@ TALİMAT:
                 response.raise_for_status()
                 return response.json()['choices'][0]['message']['content'].strip()
             except Exception as e:
-                print(f"Refine Error (OpenRouter): {e}")
-
-            except Exception as e:
-                print(f"Refine Error (OpenRouter): {e}")
+                logger.error(f"Refine Error (OpenRouter): {e}")
 
         return text # Hata durumunda orijinali döndür
 

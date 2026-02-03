@@ -15,7 +15,9 @@ import hashlib
 import os
 from datetime import datetime
 import csv
-# Removed PyQt5 and UI imports for backend compatibility
+from utils.logger import get_pdf_logger
+
+logger = get_pdf_logger()
 
 class PDFSearchEngine:
     def __init__(self):
@@ -30,7 +32,7 @@ class PDFSearchEngine:
         try:
             self.cache_dir.mkdir(exist_ok=True)
         except Exception as e:
-            print(f"Cache klasörü oluşturulamadı: {e}")
+            logger.error(f"Cache klasörü oluşturulamadı: {e}")
 
     def get_file_hash(self, file_path):
         """Dosya hash'i hesapla (dosya değişti mi kontrol için)"""
@@ -69,10 +71,10 @@ class PDFSearchEngine:
             with open(self.cache_file, 'w', encoding='utf-8') as f:
                 json.dump(cache_data, f, ensure_ascii=False, indent=2)
 
-            print(f"Cache kaydedildi: {len(self.loaded_files)} dosya")
+            logger.info(f"Cache kaydedildi: {len(self.loaded_files)} dosya")
             return True
         except Exception as e:
-            print(f"Cache kaydetme hatası: {e}")
+            logger.error(f"Cache kaydetme hatası: {e}")
             return False
 
     def load_cache(self):
@@ -101,13 +103,13 @@ class PDFSearchEngine:
             # Yeni eklenen dosyaları bul
             new_files = current_pdf_files - cached_files
             if new_files:
-                print(f"Yeni PDF dosyaları bulundu: {new_files}")
+                logger.info(f"Yeni PDF dosyaları bulundu: {new_files}")
                 return False  # Yeni dosyalar var, cache geçersiz
 
             # Silinen dosyaları bul
             deleted_files = cached_files - current_pdf_files
             if deleted_files:
-                print(f"Silinen PDF dosyaları: {deleted_files}")
+                logger.info(f"Silinen PDF dosyaları: {deleted_files}")
                 # Silinen dosyaları cache'den çıkar, ama diğerlerini yükle
                 for df in deleted_files:
                     invalid_files.append(df)
@@ -136,7 +138,7 @@ class PDFSearchEngine:
 
             # Dosyalar değişmişse cache geçersiz
             if changed_files:
-                print(f"Değişen dosyalar var, yeniden yüklenecek: {changed_files}")
+                logger.info(f"Değişen dosyalar var, yeniden yüklenecek: {changed_files}")
                 return False
 
             # Cache geçerli, verileri yükle (silinen dosyaları hariç tut)
@@ -161,11 +163,11 @@ class PDFSearchEngine:
             else:
                 self.cache_timestamp = "Bilinmiyor"
 
-            print(f"Cache'den yüklendi: {len(self.loaded_files)} dosya (Son güncelleme: {self.cache_timestamp})")
+            logger.info(f"Cache'den yüklendi: {len(self.loaded_files)} dosya (Son güncelleme: {self.cache_timestamp})")
             return True
 
         except Exception as e:
-            print(f"Cache yükleme hatası: {e}")
+            logger.error(f"Cache yükleme hatası: {e}")
             return False
 
     def clear_cache(self):
@@ -173,10 +175,10 @@ class PDFSearchEngine:
         try:
             if self.cache_file.exists():
                 self.cache_file.unlink()
-            print("Cache temizlendi")
+            logger.info("Cache temizlendi")
             return True
         except Exception as e:
-            print(f"Cache temizleme hatası: {e}")
+            logger.error(f"Cache temizleme hatası: {e}")
             return False
 
     def load_pdf(self, pdf_path):
@@ -283,7 +285,7 @@ class PDFSearchEngine:
             return True
 
         except Exception as e:
-            print(f"Hata: {str(e)}")
+            logger.error(f"Hata: {str(e)}")
             return False
 
     def search_poz_number(self, poz_no):
@@ -600,8 +602,8 @@ class PDFSearchEngine:
 
     def extract_poz_analysis(self, poz_no):
         """Poz numarasının tam analiz tablosunu çıkar - Gelişmiş Pattern Matching"""
-        print(f"\n=== POZ ANALİZİ DEBUG BAŞLANGICI ===")
-        print(f"Aranan Poz: {poz_no}")
+        logger.debug(f"=== POZ ANALİZİ DEBUG BAŞLANGICI ===")
+        logger.debug(f"Aranan Poz: {poz_no}")
 
         analysis_data = {
             'poz_no': poz_no,
@@ -623,17 +625,17 @@ class PDFSearchEngine:
                 analysis_files.append(file_name)
 
         if not analysis_files:
-            print(f"❌ Analiz dosyası bulunamadı!")
-            print(f"📁 Yüklü dosyalar: {list(self.pdf_data.keys())}")
-            print(f"💡 Dosya adında 'analiz' kelimesi olmalı")
+            logger.error(f"❌ Analiz dosyası bulunamadı!")
+            logger.debug(f"📁 Yüklü dosyalar: {list(self.pdf_data.keys())}")
+            logger.debug(f"💡 Dosya adında 'analiz' kelimesi olmalı")
             return analysis_data
 
-        print(f"✅ Analiz dosyalarında arama yapılacak: {analysis_files}")
+        logger.info(f"✅ Analiz dosyalarında arama yapılacak: {analysis_files}")
 
         # DEBUG: Analiz dosyalarındaki satır sayılarını göster
         for af in analysis_files:
             line_count = len(self.pdf_data[af])
-            print(f"📄 {af}: {line_count} satır")
+            logger.debug(f"📄 {af}: {line_count} satır")
 
         # Önce ana poz başlangıcını bul - Daha kapsamlı arama
         analysis_start_page = None
@@ -651,13 +653,13 @@ class PDFSearchEngine:
 
         for file_name in analysis_files:
             lines = self.pdf_data[file_name]
-            print(f"\n📖 {file_name} analiz dosyasında poz arıyor... ({len(lines)} satır)")
+            logger.debug(f"📖 {file_name} analiz dosyasında poz arıyor... ({len(lines)} satır)")
 
             # DEBUG: İlk 10 satırı göster
-            print("📋 İlk 10 satır örneği:")
+            logger.debug("📋 İlk 10 satır örneği:")
             for idx in range(min(10, len(lines))):
                 sample_text = lines[idx]['text'][:80]
-                print(f"   {idx+1}: {sample_text}...")
+                logger.debug(f"   {idx+1}: {sample_text}...")
 
             # DEBUG: Poz geçen satırları ara
             poz_lines_found = []
@@ -677,19 +679,19 @@ class PDFSearchEngine:
                     if poz_var in text:
                         poz_lines_found.append((i+1, poz_var, text[:100]))
 
-            print(f"📊 Dosyada bulunan TÜM poz numaraları ({len(all_poz_numbers)} adet):")
+            logger.debug(f"📊 Dosyada bulunan TÜM poz numaraları ({len(all_poz_numbers)} adet):")
             for poz in sorted(all_poz_numbers)[:20]:  # İlk 20'sini göster
-                print(f"   {poz}")
+                logger.debug(f"   {poz}")
             if len(all_poz_numbers) > 20:
-                print(f"   ... ve {len(all_poz_numbers) - 20} adet daha")
+                logger.debug(f"   ... ve {len(all_poz_numbers) - 20} adet daha")
 
             if poz_lines_found:
-                print(f"🎯 Aranan '{poz_no}' poz varyasyonları için bulunan satırlar:")
+                logger.debug(f"🎯 Aranan '{poz_no}' poz varyasyonları için bulunan satırlar:")
                 for line_num, found_poz, sample in poz_lines_found[:5]:  # İlk 5'ini göster
-                    print(f"   Satır {line_num}: '{found_poz}' -> {sample}...")
+                    logger.debug(f"   Satır {line_num}: '{found_poz}' -> {sample}...")
             else:
-                print(f"❌ '{poz_no}' için hiçbir satırda poz varyasyonu bulunamadı!")
-                print(f"💡 15.490.1003 dosyada var mı? {('15.490.1003' in str(all_poz_numbers))}")
+                logger.debug(f"❌ '{poz_no}' için hiçbir satırda poz varyasyonu bulunamadı!")
+                logger.debug(f"💡 15.490.1003 dosyada var mı? {('15.490.1003' in str(all_poz_numbers))}")
 
             for i, line_data in enumerate(lines):
                 text = line_data['text']
@@ -718,14 +720,14 @@ class PDFSearchEngine:
                 if not found_poz:
                     continue
 
-                print(f"✅ Poz bulundu ({found_poz}) - Aranan: ({poz_no}): {text[:100]}...")
+                logger.info(f"✅ Poz bulundu ({found_poz}) - Aranan: ({poz_no})")
 
                 # ÖNEMLI: Eğer aranan poz ile bulunan poz farklıysa uyar
                 if found_poz != poz_no:
-                    print(f"⚠️  UYARI: Aranan '{poz_no}' ama bulunan '{found_poz}' - Bu yanlış sonuç olabilir!")
+                    logger.warning(f"⚠️  UYARI: Aranan '{poz_no}' ama bulunan '{found_poz}' - Bu yanlış sonuç olabilir!")
                     # Eğer tam poz numarası aranıyorsa ve farklı bir şey bulunduysa devam etme
                     if poz_no != found_poz and poz_no in poz_variations[0:1]:  # Sadece ilk varyasyon tam poz
-                        print(f"🚫 Yanlış poz, devam ediliyor...")
+                        logger.debug(f"🚫 Yanlış poz, devam ediliyor...")
                         continue
 
                 # 1) Tam analiz tablosu başlık satırı - resimdeki gibi
@@ -767,8 +769,8 @@ class PDFSearchEngine:
                         analysis_start_page = line_data['page']
                         analysis_start_line = i
                         analysis_start_file = file_name
-                        print(f"Ana tablo başlığı bulundu: {file_name} - Sayfa {analysis_start_page}")
-                        print(f"Başlık: {analysis_data['description']} - Birim: {analysis_data['unit']}")
+                        logger.info(f"Ana tablo başlığı bulundu: {file_name} - Sayfa {analysis_start_page}")
+                        logger.debug(f"Başlık: {analysis_data['description']} - Birim: {analysis_data['unit']}")
                         break
 
                 # 2) Başlık tablosu formatı (Poz No, Analizin Adı, vb. başlıkları içeren)
@@ -782,7 +784,7 @@ class PDFSearchEngine:
 
                         # Bu satırda poz var mı?
                         if any(pv in next_text for pv in poz_variations):
-                            print(f"Başlık altında poz bulundu: {next_text[:100]}...")
+                            logger.debug(f"Başlık altında poz bulundu: {next_text[:100]}...")
 
                             # Parse et
                             parsed_data = self.parse_table_row(next_text)
@@ -791,7 +793,7 @@ class PDFSearchEngine:
                                 analysis_start_page = next_line['page']
                                 analysis_start_line = i + j
                                 analysis_start_file = file_name
-                                print(f"Parse edilmiş veri başlığı: {file_name} - Sayfa {analysis_start_page}")
+                                logger.info(f"Parse edilmiş veri başlığı: {file_name} - Sayfa {analysis_start_page}")
                                 break
 
                     if analysis_start_page is not None:
