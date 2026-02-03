@@ -53,7 +53,13 @@ class CriticService:
         
         # Rule Service
         from services.rule_service import RuleService
+        # Rule Service
+        from services.rule_service import RuleService
         self.rule_service = RuleService()
+
+        # AI Service (Lazy load to avoid circular imports if any)
+        from services.ai_service import AIAnalysisService
+        self.ai_service = AIAnalysisService()
     
     def review_analysis(self, 
                        analysis_result: Dict,
@@ -88,6 +94,27 @@ class CriticService:
 
         # 6. Kullanıcı Tanımlı Kurallar (Öğrenen AI)
         all_issues.extend(self.check_user_rules(components, description))
+
+        # 7. LLM Tabanlı Semantik Kontrol (YENİ - Gerçek Agent)
+        # Sadece kritik hata yoksa veya kullanıcı özellikle istediyse çalıştırılabilir
+        # Şimdilik her zaman çalıştırıyoruz (User Request)
+        try:
+            from services.ai_service import logger
+            logger.info("LLM Critic başlatılıyor...")
+            
+            llm_result = self.ai_service.review_analysis(analysis_result, description)
+            
+            if llm_result.get("status") != "error": # LLM çalıştıysa
+                llm_issues = llm_result.get("issues", [])
+                for issue in llm_issues:
+                    all_issues.append(Issue(
+                        severity=issue.get("severity", "warning"),
+                        category=f"AI: {issue.get('category', 'Genel')}", # Kaynağı belli olsun
+                        message=issue.get("message", ""),
+                        suggestion=issue.get("suggestion", "")
+                    ))
+        except Exception as e:
+            print(f"LLM Critic Integration Error: {e}")
         
         # Durum belirle
         has_critical = any(i.severity == "critical" for i in all_issues)

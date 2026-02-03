@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import api from '@/lib/api';
-import { LayoutDashboard, FileText, Calculator, Sparkles, Save, ArrowRight, Archive, CheckCircle2, AlertCircle, XCircle } from 'lucide-react';
+import { LayoutDashboard, FileText, Calculator, Sparkles, Save, ArrowRight, Archive, CheckCircle2, AlertCircle, XCircle, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 import { useLLMUsage } from '@/context/LLMUsageContext';
+import { useNotification } from '@/context/NotificationContext';
 
 export default function Home() {
   const [stats, setStats] = useState({ totalItems: 0, totalFiles: 0, totalUsage: 0 });
@@ -12,6 +13,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [backendStatus, setBackendStatus] = useState<{ status: string; poz_count: number } | null>(null);
   const { usageData, loading: usageLoading } = useLLMUsage();
+  const { confirm, showNotification } = useNotification();
 
   useEffect(() => {
     async function fetchData() {
@@ -49,6 +51,26 @@ export default function Home() {
 
     return () => clearInterval(interval);
   }, [usageData.total_usage]); // Re-run if usageData changes
+
+  const handleDeleteProject = async (e: React.MouseEvent, projectId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    confirm({
+      title: "Projeyi Sil",
+      message: "Bu projeyi silmek istediğinize emin misiniz? Bu işlem geri alınamaz ve tüm analiz verileri silinecektir.",
+      onConfirm: async () => {
+        try {
+          await api.delete(`/projects/${projectId}`);
+          setRecentAnalyses(prev => prev.filter(p => p.id !== projectId));
+          showNotification("Proje başarıyla silindi", "success");
+        } catch (error) {
+          console.error("Proje silme hatası:", error);
+          showNotification("Proje silinirken bir hata oluştu", "error");
+        }
+      }
+    });
+  };
 
   // Placeholder for TransportCalculator component
   const TransportCalculator = () => (
@@ -152,8 +174,10 @@ export default function Home() {
               </div>
             ) : (
               recentAnalyses.slice(0, 5).map((item, idx) => (
-                <Link key={idx} href={`/cost?id=${item.id}`} className="p-4 hover:bg-[#18181b] transition-colors group flex items-center justify-between">
-                  <div className="space-y-1">
+                <div key={idx} className="p-4 hover:bg-[#18181b] transition-colors group flex items-center justify-between border-b border-[#27272a] last:border-0 relative">
+                  <Link href={`/cost?id=${item.id}`} className="absolute inset-0 z-0" aria-label="Projeye git" />
+
+                  <div className="space-y-1 relative z-10 pointer-events-none">
                     <h4 className="text-sm font-semibold text-[#fafafa] group-hover:text-blue-400 transition-colors">
                       {item.name || `Analiz #${item.id.substring(0, 8)}`}
                     </h4>
@@ -163,8 +187,18 @@ export default function Home() {
                       <span className="font-medium text-[#a1a1aa]">{item.unit_price ? `${item.unit_price.toLocaleString('tr-TR')} TL/${item.unit}` : 'Detay yok'}</span>
                     </div>
                   </div>
-                  <ArrowRight className="w-4 h-4 text-[#27272a] group-hover:text-[#a1a1aa] transition-colors" />
-                </Link>
+
+                  <div className="flex items-center gap-3 relative z-10">
+                    <button
+                      onClick={(e) => handleDeleteProject(e, item.id)}
+                      className="p-2 text-[#71717a] hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer"
+                      title="Projeyi Sil"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                    <ArrowRight className="w-4 h-4 text-[#27272a] group-hover:text-[#a1a1aa] transition-colors pointer-events-none" />
+                  </div>
+                </div>
               ))
             )}
           </div>
@@ -193,7 +227,7 @@ export default function Home() {
           </div>
         </div>
       </div>
-    </div>
+    </div >
   );
 }
 

@@ -161,6 +161,110 @@ KURALLAR:
 
         return text  # Hata durumunda orijinali döndür
 
+    def review_analysis(self, analysis_data: Dict[str, Any], description: str) -> Dict[str, Any]:
+        """
+        Analizi LLM (Kıdemli Mühendis) ile inceler.
+        Mantık hatalarını, eksik kalemleri ve fiyat tutarsızlıklarını semantik olarak kontrol eder.
+        """
+        prompt = f"""Sen Çevre ve Şehircilik Bakanlığı standartlarına hakim, 30 yıllık tecrübeli bir KIDEMLİ İHALE BAŞMÜHENDİSİSİN.
+Görevin, önüne gelen birim fiyat analizini (yaklaşık maliyet cetvelini) denetlemek ve hataları bulmaktır.
+
+═══════════════════════════════════════════════════════════════
+ANALİZ EDİLECEK İŞ TANIMI:
+"{description}"
+
+MEVCUT ANALİZ VERİLERİ:
+{json.dumps(analysis_data, indent=2, ensure_ascii=False)}
+═══════════════════════════════════════════════════════════════
+
+DENETİM VE ELEŞTİRİ KURALLARI:
+
+1. YAPIM TEKNİĞİ VE MANTIK KONTROLÜ:
+   - Seçilen imalat yöntemi, iş tanımına uygun mu?
+   - Örneğin: "Beton santrali" denmişse, elle karışım pozları (çimento+kum+çakıl) OLMAMALIDIR! Hazır beton olmalıdır.
+   - Örneğin: "Betonarme" denmişse, DEMİR ve KALIP mutlaka olmalıdır.
+   - Örneğin: "Duvar" varsa, HARÇ mutlaka olmalıdır (harçsız duvar hariç).
+
+2. EKSİK KALEM KONTROLÜ:
+   - İşin tamamlanması için zorunlu olan yan imalatlar var mı?
+   - Örn: Kazı varsa dolgu veya nakliye var mı?
+   - Örn: Boya varsa astar var mı?
+
+3. FİYAT VE MİKTAR TUTARLILIĞI:
+   - Miktarlar gerçekçi mi? (Örn: 1 m³ beton için 2 m³ kum yazılmışsa HATA)
+   - Fiyatlar güncel piyasa/ÇŞB rayiçleriyle uyumlu mu? (Aşırı düşük/yüksek mi?)
+
+4. ŞÜPHELİ DURUMLAR:
+   - Aynı iş için hem makine hem el işçiliği mükerrer yazılmış mı?
+   - Uyumsuz birimler var mı? (Metre tül işi m³ olarak hesaplanmış mı?)
+
+═══════════════════════════════════════════════════════════════
+ÇIKTI FORMATI (SADECE JSON):
+
+{{
+  "status": "ok" | "warning" | "error",
+  "issues": [
+    {{
+      "severity": "critical" | "warning" | "info",
+      "category": "Mantık Hatası" | "Eksik Kalem" | "Fiyat Hatası" | "Miktar Hatası",
+      "message": "Hata açıklaması (kısa ve net)",
+      "suggestion": "Nasıl düzeltilmeli? (teknik öneri)"
+    }}
+  ],
+  "general_comment": "Genel değerlendirme notun (opsiyonel)"
+}}
+
+Eğer analiz MÜKEMMEL ise "issues" listesini boş bırak ve status="ok" döndür.
+Çok katı ve dikkatli ol. Hata yoksa zorlama.
+"""
+
+        errors = []
+
+        # Try OpenRouter first (LLM call)
+        if self.openrouter_key:
+            try:
+                headers = {
+                    "Authorization": f"Bearer {self.openrouter_key}",
+                    "Content-Type": "application/json",
+                     "HTTP-Referer": "https://approximatecostpro.com",
+                     "X-Title": "Approximate Cost Pro"
+                }
+                data = {
+                    "model": self.model, # "google/gemini-2.0-flash-001" usually
+                    "messages": [
+                        {"role": "system", "content": "Sen hata affetmeyen, titiz bir Başmühendissin. JSON formatında yanıt verirsin."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.2
+                }
+                logger.info("LLM Critic (OpenRouter) çağrılıyor...")
+                response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=60)
+                response.raise_for_status()
+                content = response.json()['choices'][0]['message']['content']
+                return self._process_response(content)
+            except Exception as e:
+                errors.append(f"OpenRouter Critic Error: {e}")
+
+        # Try Gemini (LLM call)
+        if self.gemini_key:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={self.gemini_key}"
+                data = {
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}
+                }
+                logger.info("LLM Critic (Gemini) çağrılıyor...")
+                response = requests.post(url, json=data, timeout=60)
+                response.raise_for_status()
+                content = response.json()['candidates'][0]['content']['parts'][0]['text']
+                return self._process_response(content)
+            except Exception as e:
+                errors.append(f"Gemini Critic Error: {e}")
+
+        # If LLM fails, return empty result (let rule-based system handle it)
+        print(f"LLM Critic Failed: {errors}")
+        return {"status": "ok", "issues": [], "general_comment": "LLM servisi yanıt vermedi, yerel kurallar geçerli."}
+
     def generate_analysis(self, description: str, unit: str, context_data: str = "") -> Dict[str, Any]:
         """
         Analiz oluşturma ana fonksiyonu.
@@ -480,6 +584,13 @@ SADECE aşağıdaki JSON formatında yanıt ver, başka hiçbir şey yazma:
 • Genel gider ve yüklenici kârı (%25) birim fiyatlara yedirilmiştir
 • Bu analiz ihale dosyalarında kullanıma uygun formattadır
 • Emsal poz referansları veritabanından alınmıştır",
+  "technical_specification": "Beton üretimine uygun komple beton tesisinde (asgari 60m³/sa kapasiteli...) standardına uygun...
+  
+Ölçü: Projedeki boyutlar üzerinden hesaplanır.
+  
+Not: 
+1) Üretilen betonun TSE belgeli olması zorunludur.
+2) Pompa bedeli analizden düşülür.",
   "components": [
     {{
       "type": "Malzeme",

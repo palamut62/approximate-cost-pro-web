@@ -55,28 +55,28 @@ export default function Notification() {
 
             {/* Confirm Dialog */}
             {confirmState && (
-                <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[10000] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => { confirmState.onCancel?.(); closeConfirm(); }}>
-                    <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10000] flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => { confirmState.onCancel?.(); closeConfirm(); }}>
+                    <div className="bg-[#09090b] border border-[#27272a] rounded-2xl shadow-2xl max-w-sm w-full overflow-hidden animate-in zoom-in-95 duration-200 ring-1 ring-white/10" onClick={e => e.stopPropagation()}>
                         <div className="p-6">
                             <div className="flex items-center gap-3 mb-4">
-                                <div className="p-2 bg-amber-100 rounded-full">
-                                    <AlertTriangle className="w-6 h-6 text-amber-600" />
+                                <div className="p-2 bg-amber-500/10 rounded-full border border-amber-500/20">
+                                    <AlertTriangle className="w-6 h-6 text-amber-500" />
                                 </div>
-                                <h3 className="text-lg font-bold text-slate-800">
+                                <h3 className="text-lg font-bold text-[#fafafa] tracking-tight">
                                     {confirmState.title || 'Onay Gerekiyor'}
                                 </h3>
                             </div>
-                            <p className="text-slate-600">
+                            <p className="text-[#a1a1aa] text-sm leading-relaxed">
                                 {confirmState.message}
                             </p>
                         </div>
-                        <div className="p-4 bg-slate-50 flex justify-end gap-3 border-t border-slate-100">
+                        <div className="p-4 bg-[#18181b]/50 flex justify-end gap-3 border-t border-[#27272a]">
                             <button
                                 onClick={() => {
                                     confirmState.onCancel?.();
                                     closeConfirm();
                                 }}
-                                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg transition-colors font-medium text-sm"
+                                className="px-4 py-2 text-[#a1a1aa] hover:text-[#fafafa] hover:bg-[#27272a] rounded-lg transition-colors font-medium text-sm"
                             >
                                 Vazgeç
                             </button>
@@ -85,7 +85,7 @@ export default function Notification() {
                                     confirmState.onConfirm();
                                     closeConfirm();
                                 }}
-                                className="px-6 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium text-sm shadow-sm"
+                                className="px-6 py-2 bg-red-600/90 hover:bg-red-600 text-white rounded-lg transition-all shadow-lg shadow-red-900/20 active:scale-95 font-medium text-sm"
                             >
                                 Onayla
                             </button>
