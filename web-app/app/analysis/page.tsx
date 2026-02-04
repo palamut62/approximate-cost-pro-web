@@ -489,41 +489,43 @@ export default function AnalysisPage() {
     return (
         <div className="flex flex-col h-full relative">
             {/* Usage Stats Card */}
-            <div className="absolute top-4 right-4 z-50 hidden md:block">
-                <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4 shadow-2xl flex flex-col gap-2 min-w-[200px]">
-                    <div className="flex items-center gap-2 mb-1">
-                        <div className="p-1.5 bg-purple-500/10 rounded-lg">
-                            <Sparkles className="w-3 h-3 text-purple-500" />
-                        </div>
-                        <span className="text-[10px] font-bold text-[#fafafa] uppercase tracking-widest">AI Limitleri</span>
-                    </div>
-                    {usageLoading ? (
-                        <div className="space-y-2 py-1">
-                            <div className="h-3 w-full bg-[#27272a] animate-pulse rounded"></div>
-                            <div className="h-3 w-3/4 bg-[#27272a] animate-pulse rounded"></div>
-                        </div>
-                    ) : (
-                        <div className="space-y-1">
-                            <div className="flex justify-between items-end">
-                                <span className="text-xs text-[#a1a1aa]">Kalan</span>
-                                <span className={cn("text-sm font-bold font-mono", usageData.is_low_balance ? "text-red-500" : "text-green-500")}>
-                                    ${(usageData.remaining ?? 0).toFixed(2)}
-                                </span>
+            {!result && (
+                <div className="absolute top-4 right-4 z-50 hidden md:block">
+                    <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4 shadow-2xl flex flex-col gap-2 min-w-[200px]">
+                        <div className="flex items-center gap-2 mb-1">
+                            <div className="p-1.5 bg-purple-500/10 rounded-lg">
+                                <Sparkles className="w-3 h-3 text-purple-500" />
                             </div>
-                            <div className="flex justify-between items-end">
-                                <span className="text-xs text-[#a1a1aa]">Limit</span>
-                                <span className="text-sm font-bold text-[#71717a] font-mono">${(usageData.total_credits ?? 0).toFixed(2)}</span>
+                            <span className="text-[10px] font-bold text-[#fafafa] uppercase tracking-widest">AI Limitleri</span>
+                        </div>
+                        {usageLoading ? (
+                            <div className="space-y-2 py-1">
+                                <div className="h-3 w-full bg-[#27272a] animate-pulse rounded"></div>
+                                <div className="h-3 w-3/4 bg-[#27272a] animate-pulse rounded"></div>
                             </div>
-                            {usageData.is_low_balance && (
-                                <div className="mt-2 text-[10px] text-red-500 font-bold bg-red-500/10 px-2 py-1 rounded flex items-center justify-center gap-1 animate-pulse">
-                                    <AlertTriangle className="w-3 h-3" />
-                                    BAKİYE AZALDI
+                        ) : (
+                            <div className="space-y-1">
+                                <div className="flex justify-between items-end">
+                                    <span className="text-xs text-[#a1a1aa]">Kalan</span>
+                                    <span className={cn("text-sm font-bold font-mono", usageData.is_low_balance ? "text-red-500" : "text-green-500")}>
+                                        ${(usageData.remaining ?? 0).toFixed(2)}
+                                    </span>
                                 </div>
-                            )}
-                        </div>
-                    )}
+                                <div className="flex justify-between items-end">
+                                    <span className="text-xs text-[#a1a1aa]">Limit</span>
+                                    <span className="text-sm font-bold text-[#71717a] font-mono">${(usageData.total_credits ?? 0).toFixed(2)}</span>
+                                </div>
+                                {usageData.is_low_balance && (
+                                    <div className="mt-2 text-[10px] text-red-500 font-bold bg-red-500/10 px-2 py-1 rounded flex items-center justify-center gap-1 animate-pulse">
+                                        <AlertTriangle className="w-3 h-3" />
+                                        BAKİYE AZALDI
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
                 </div>
-            </div>
+            )}
             {
                 !result ? (
                     // Initial State - Centered Search (Refined Bolt Aesthetic)
@@ -622,410 +624,231 @@ export default function AnalysisPage() {
                     </div>
                 ) : (
                     // Result View
-                    <div className="max-w-5xl mx-auto w-full space-y-10 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                        <div className="bg-[#18181b] rounded-2xl border border-[#27272a] p-8 shadow-2xl relative overflow-hidden group">
-                            {/* Abstract Background Detail */}
-                            <div className="absolute top-0 right-0 w-64 h-64 bg-blue-600/5 rounded-full blur-3xl -mr-32 -mt-32 group-hover:bg-blue-600/10 transition-colors duration-1000"></div>
-
-                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
-                                <div className="flex items-start gap-5">
-                                    <div className="p-4 bg-blue-600/10 text-blue-500 rounded-2xl border border-blue-500/20 shadow-inner">
-                                        <Sparkles className="w-8 h-8" />
+                    // Result View - Full Width & Compact
+                    <div className="w-full h-full flex flex-col bg-[#09090b]">
+                        {/* Top Action Bar (Sticky) */}
+                        <div className="sticky top-0 z-40 bg-[#09090b]/95 backdrop-blur-md border-b border-[#27272a] px-6 py-3 flex items-center justify-between shadow-sm">
+                            <div className="flex items-center gap-4">
+                                <div className="flex items-center gap-3">
+                                    <div className="p-2 bg-blue-600/10 text-blue-500 rounded-lg border border-blue-500/20">
+                                        <Sparkles className="w-5 h-5" />
                                     </div>
-                                    <div className="space-y-2">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest px-2 py-0.5 bg-blue-600/10 border border-blue-500/20 rounded">Analiz Tamamlandı</span>
-                                            <span className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest">{new Date().toLocaleDateString('tr-TR')}</span>
-                                        </div>
-                                        <h2 className="text-2xl md:text-3xl font-bold text-[#fafafa] tracking-tight leading-tight">
-                                            {description}
+                                    <div>
+                                        <h2 className="text-lg font-bold text-[#fafafa] leading-none truncate max-w-md" title={description}>
+                                            {analysisName || description}
                                         </h2>
+                                        <div className="flex items-center gap-3 mt-1 text-xs text-[#a1a1aa]">
+                                            <span className="flex items-center gap-1">
+                                                <Box className="w-3 h-3" />
+                                                {displayUnit}
+                                            </span>
+                                            <span className="w-1 h-1 bg-[#27272a] rounded-full" />
+                                            <span className={cn(
+                                                "font-bold",
+                                                result.metadata?.analysis_score && result.metadata.analysis_score >= 85 ? "text-green-500" : "text-amber-500"
+                                            )}>
+                                                %{result.metadata?.analysis_score || 0} Güven Skoru
+                                            </span>
+                                        </div>
                                     </div>
-                                </div>
-                                <div className="flex items-center gap-3 self-end md:self-center">
-                                    <button
-                                        onClick={() => setResult(null)}
-                                        className="p-3 bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-xl border border-[#3f3f46] transition-all hover:bg-[#3f3f46] shadow-lg active:scale-95"
-                                        title="Yeni Analiz"
-                                    >
-                                        <Plus className="w-5 h-5" />
-                                    </button>
-                                    <button
-                                        onClick={() => setResult(null)}
-                                        className="p-3 bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-xl border border-[#3f3f46] transition-all hover:bg-[#3f3f46] shadow-lg active:scale-95"
-                                        title="Kapat"
-                                    >
-                                        <X className="w-5 h-5" />
-                                    </button>
                                 </div>
                             </div>
 
-                            {/* Technical Specification Block (New) */}
-                            {result.technical_specification && (
-                                <div className="bg-[#18181b]/50 border border-[#27272a] rounded-xl overflow-hidden">
-                                    <button
-                                        onClick={() => toggleSection('spec')}
-                                        className="w-full flex items-center justify-between p-4 bg-[#27272a]/30 hover:bg-[#27272a]/50 transition-colors"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <FileText className="w-5 h-5 text-amber-500" />
-                                            <h3 className="text-sm font-bold text-[#fafafa] uppercase tracking-widest">Yapım Şartları ve Teknik Tarif</h3>
+                            <div className="flex items-center gap-2">
+                                <div className="hidden md:flex items-center gap-2 mr-4 border-r border-[#27272a] pr-4">
+                                    <div className="text-right">
+                                        <div className="text-[10px] text-[#71717a] font-bold uppercase tracking-widest">Birim Fiyat</div>
+                                        <div className="text-xl font-black text-[#fafafa] leading-none">
+                                            {grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-sm text-blue-500">TL</span>
                                         </div>
-                                        <ChevronDown className={cn("w-5 h-5 text-[#71717a] transition-transform", sections.spec ? "rotate-180" : "")} />
-                                    </button>
+                                    </div>
+                                </div>
 
-                                    {sections.spec && (
-                                        <div className="p-6 text-[#a1a1aa] text-sm leading-relaxed border-t border-[#27272a] whitespace-pre-line font-mono bg-[#09090b]">
-                                            {result.technical_specification}
+                                <button
+                                    onClick={handleSaveAnalysis}
+                                    disabled={saveLoading}
+                                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-all font-bold text-xs flex items-center gap-2 shadow-lg shadow-blue-900/20 active:scale-95"
+                                >
+                                    {saveLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                    Kaydet
+                                </button>
+
+                                <button
+                                    onClick={handleSaveAsProject}
+                                    disabled={saveLoading}
+                                    className="px-4 py-2 bg-[#27272a] hover:bg-[#3f3f46] text-[#fafafa] rounded-lg transition-all font-bold text-xs border border-[#3f3f46] flex items-center gap-2 active:scale-95"
+                                >
+                                    <Box className="w-4 h-4 text-blue-500" />
+                                    Projeye Aktar
+                                </button>
+
+                                <button
+                                    onClick={handleExportExcel}
+                                    className="p-2 bg-[#18181b] hover:bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-lg border border-[#27272a] transition-all"
+                                    title="Excel İndir"
+                                >
+                                    <FileDown className="w-4 h-4" />
+                                </button>
+
+                                <button
+                                    onClick={() => { setFeedbackModalTab('ai'); setShowFeedbackModal(true); }}
+                                    className="p-2 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 rounded-lg border border-purple-500/20 transition-all"
+                                    title="Öneriler"
+                                >
+                                    <Sparkles className="w-4 h-4" />
+                                </button>
+
+                                <button
+                                    onClick={() => setResult(null)}
+                                    className="p-2 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-lg border border-red-500/20 transition-all ml-2"
+                                    title="Kapat"
+                                >
+                                    <X className="w-4 h-4" />
+                                </button>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-auto p-6 scroll-smooth">
+                            <div className="max-w-[1920px] mx-auto grid grid-cols-1 xl:grid-cols-4 gap-6 items-start h-full">
+
+                                {/* Main Content: Table (Wide) */}
+                                <div className="xl:col-span-3 space-y-6">
+                                    {/* Detail Table */}
+                                    <div className="bg-[#18181b] rounded-xl shadow-xl border border-[#27272a] overflow-hidden">
+                                        <div className="p-4 border-b border-[#27272a] flex items-center justify-between bg-black/20">
+                                            <div className="flex items-center gap-3">
+                                                <Table className="w-4 h-4 text-blue-500" />
+                                                <h3 className="text-xs font-bold text-[#fafafa] uppercase tracking-widest leading-none">Analiz Detay Cetveli</h3>
+                                            </div>
+                                            <button
+                                                onClick={addNewComponent}
+                                                className="px-3 py-1.5 bg-[#27272a] text-[#fafafa] rounded-lg border border-[#3f3f46] hover:bg-[#3f3f46] transition-all text-[10px] font-bold flex items-center gap-2 group active:scale-95"
+                                            >
+                                                <Plus className="w-3 h-3 text-blue-500 group-hover:scale-125 transition-transform" />
+                                                KALEM EKLE
+                                            </button>
+                                        </div>
+                                        <div className="p-0">
+                                            <AnalysisTable
+                                                className="border-0 rounded-none shadow-none"
+                                                data={(result.analysis_data && result.analysis_data.components && result.analysis_data.components.length > 0)
+                                                    ? result.analysis_data
+                                                    : {
+                                                        poz_no: "Y.ANALİZ",
+                                                        name: analysisName || description,
+                                                        unit: displayUnit,
+                                                        components: result.components.map(c => ({
+                                                            type: c.type,
+                                                            code: c.code,
+                                                            name: c.name,
+                                                            unit: c.unit,
+                                                            quantity: c.quantity.toString(),
+                                                            price: c.unit_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                            total: c.total_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 })
+                                                        })),
+                                                        totals: {
+                                                            subtotal: subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                            profit: overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                            grand_total: grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                            label: `1 ${displayUnit} Fiyatı`
+                                                        }
+                                                    }}
+                                                description={result.technical_description || result.explanation}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Critic Review (Collapsed/Compact) */}
+                                    {result.critic_review && result.critic_review.status !== 'ok' && (
+                                        <div className={cn(
+                                            "rounded-xl border shadow-lg overflow-hidden",
+                                            result.critic_review.status === 'error' ? "bg-red-500/5 border-red-500/20" : "bg-amber-500/5 border-amber-500/20"
+                                        )}>
+                                            <div className="p-4 flex items-center justify-between border-b border-white/5">
+                                                <div className="flex items-center gap-3">
+                                                    <GraduationCap className={cn("w-5 h-5", result.critic_review.status === 'error' ? "text-red-500" : "text-amber-500")} />
+                                                    <h4 className="text-sm font-bold text-[#fafafa]">
+                                                        {result.critic_review.status === 'error' ? "Kritik Uyarılar" : "İyileştirme Önerileri"}
+                                                    </h4>
+                                                </div>
+                                            </div>
+                                            <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                {result.critic_review.issues.map((issue, idx) => (
+                                                    <div key={idx} className="flex items-start gap-3 p-3 bg-[#09090b]/60 rounded-lg border border-[#27272a]">
+                                                        <div className={cn(
+                                                            "w-1.5 h-1.5 rounded-full mt-1.5 shrink-0",
+                                                            issue.severity === 'critical' ? "bg-red-500" : "bg-amber-500"
+                                                        )} />
+                                                        <div className="space-y-1">
+                                                            <div className="text-xs font-bold text-[#fafafa]">{issue.category}</div>
+                                                            <p className="text-xs text-[#a1a1aa] leading-relaxed">{issue.message}</p>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
                                         </div>
                                     )}
                                 </div>
-                            )}
-                        </div>
 
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                            {/* Left Column: Stats & Technical Data */}
-                            <div className="lg:col-span-2 space-y-8">
-                                {/* Analiz Adı Editor */}
-                                <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-6 group focus-within:border-blue-500/30 transition-colors">
-                                    <div className="flex items-center gap-2 mb-4">
-                                        <FileText className="w-4 h-4 text-[#52525b]" />
-                                        <label className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest italic">Dosya Adı / Kayıt Başlığı</label>
-                                    </div>
-                                    <input
-                                        type="text"
-                                        value={analysisName}
-                                        onChange={(e) => setAnalysisName(e.target.value)}
-                                        placeholder="Analiz adı girin..."
-                                        className="w-full px-0 bg-transparent border-none outline-none text-xl font-bold text-[#fafafa] placeholder-[#3f3f46] transition-colors"
-                                    />
-                                </div>
-
-                                {/* Trust Score & Warnings */}
-                                {result.metadata && (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        {/* Analysis Score */}
-                                        <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-8 space-y-6">
-                                            <div className="flex justify-between items-center">
-                                                <div className="space-y-1">
-                                                    <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none">AI Güven Skoru</h3>
-                                                    <p className="text-sm text-white font-medium">Analiz hassasiyeti ve veri doğruluğu</p>
-                                                </div>
-                                                <div className={cn(
-                                                    "text-4xl font-black tracking-tighter transition-colors",
-                                                    result.metadata.analysis_score >= 85 ? "text-green-500" :
-                                                        result.metadata.analysis_score >= 60 ? "text-amber-500" : "text-red-500"
-                                                )}>
-                                                    %{result.metadata.analysis_score}
-                                                </div>
+                                {/* Sidebar: Technical Details (Narrower) */}
+                                <div className="space-y-6 xl:col-span-1 h-full overflow-y-auto pr-2 custom-scrollbar">
+                                    {/* Technical Specification */}
+                                    {result.technical_specification && (
+                                        <div className="bg-[#18181b] border border-[#27272a] rounded-xl overflow-hidden shadow-sm">
+                                            <div className="p-3 bg-black/20 border-b border-[#27272a] flex items-center gap-2">
+                                                <FileText className="w-4 h-4 text-[#71717a]" />
+                                                <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest">Yapım Şartları</h3>
                                             </div>
-                                            <div className="w-full bg-[#09090b] rounded-full h-3 border border-[#27272a] p-0.5">
-                                                <motion.div
-                                                    initial={{ width: 0 }}
-                                                    animate={{ width: `${result.metadata.analysis_score}%` }}
-                                                    transition={{ duration: 1.5, ease: "circOut" }}
-                                                    className={cn(
-                                                        "h-full rounded-full shadow-[0_0_10px_-2px_rgba(0,0,0,0.5)]",
-                                                        result.metadata.analysis_score >= 85 ? "bg-gradient-to-r from-green-600 to-green-400" :
-                                                            result.metadata.analysis_score >= 60 ? "bg-gradient-to-r from-amber-600 to-amber-400" : "bg-gradient-to-r from-red-600 to-red-400"
-                                                    )}
-                                                ></motion.div>
-                                            </div>
-                                            <div className="flex items-start gap-3 p-4 bg-[#09090b] rounded-xl border border-[#27272a]">
-                                                <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-                                                <p className="text-xs text-[#71717a] leading-relaxed">
-                                                    {result.metadata.analysis_score >= 85 ? "Bu analiz yüksek düzeyde veri doğruluğu içermektedir. Veriler resmi poz veritabanı ile tam uyumludur." :
-                                                        result.metadata.analysis_score >= 60 ? "Analiz verileri benzer imalat türleri üzerinden türetilmiştir. Kalem fiyatlarını gözden geçirmeniz önerilir." :
-                                                            "Düşük güvenirlik düzeyi. Lütfen tüm kalemleri manuel olarak doğrulayın."}
-                                                </p>
+                                            <div className="p-4 text-[#a1a1aa] text-xs leading-relaxed whitespace-pre-line font-mono max-h-60 overflow-y-auto custom-scrollbar">
+                                                {result.technical_specification}
                                             </div>
                                         </div>
-                                    </div>
-                                )}
+                                    )}
 
-                                {/* Advanced Metrics (Consensus/Consistency/CoT) */}
-                                {result.advanced_metrics && (
-                                    <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-6 space-y-4">
-                                        <div className="flex items-center gap-2">
-                                            <Sparkles className="w-4 h-4 text-purple-500" />
-                                            <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none">Gelişmiş Analiz Metrikleri</h3>
-                                        </div>
+                                    {/* Metrics Compact */}
+                                    {result.metadata && (
+                                        <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4 shadow-sm space-y-4">
+                                            <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest mb-2 border-b border-[#27272a] pb-2">Analiz Metrikleri</h3>
 
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                            {/* Consensus Score */}
-                                            {result.advanced_metrics.consensus_score !== undefined && (
-                                                <div className="p-4 bg-[#09090b] rounded-xl border border-[#27272a] space-y-2">
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest">Konsensüs Skoru</span>
-                                                        <span className="text-xs text-[#52525b]">{result.advanced_metrics.model_count} model</span>
-                                                    </div>
-                                                    <div className={cn(
-                                                        "text-2xl font-black tracking-tight",
-                                                        result.advanced_metrics.consensus_score >= 0.7 ? "text-green-500" :
-                                                            result.advanced_metrics.consensus_score >= 0.4 ? "text-amber-500" : "text-red-500"
-                                                    )}>
-                                                        %{Math.round(result.advanced_metrics.consensus_score * 100)}
-                                                    </div>
-                                                    <p className="text-[10px] text-[#52525b]">
-                                                        {result.advanced_metrics.consensus_score >= 0.7 ? "Modeller güçlü uyum gösteriyor" :
-                                                            result.advanced_metrics.consensus_score >= 0.4 ? "Kısmi uyum mevcut" : "Modeller arası farklılıklar var"}
-                                                    </p>
+                                            <div className="flex items-center justify-between">
+                                                <span className="text-xs text-[#a1a1aa]">Güven Skoru</span>
+                                                <span className={cn(
+                                                    "text-sm font-bold",
+                                                    result.metadata.analysis_score >= 85 ? "text-green-500" : "text-amber-500"
+                                                )}>%{result.metadata.analysis_score}</span>
+                                            </div>
+
+                                            {result.advanced_metrics?.consensus_score !== undefined && (
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs text-[#a1a1aa]">Konsensüs</span>
+                                                    <span className="text-sm font-bold text-[#fafafa]">%{Math.round(result.advanced_metrics.consensus_score * 100)}</span>
                                                 </div>
                                             )}
 
-                                            {/* Consistency Score */}
-                                            {result.advanced_metrics.consistency_score !== undefined && (
-                                                <div className="p-4 bg-[#09090b] rounded-xl border border-[#27272a] space-y-2">
-                                                    <div className="flex items-center justify-between">
-                                                        <span className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest">Tutarlılık Skoru</span>
-                                                        <span className="text-xs text-[#52525b]">{result.advanced_metrics.sample_count} örnek</span>
-                                                    </div>
-                                                    <div className={cn(
-                                                        "text-2xl font-black tracking-tight",
-                                                        result.advanced_metrics.consistency_score >= 0.7 ? "text-green-500" :
-                                                            result.advanced_metrics.consistency_score >= 0.4 ? "text-amber-500" : "text-red-500"
-                                                    )}>
-                                                        %{Math.round(result.advanced_metrics.consistency_score * 100)}
-                                                    </div>
-                                                    {result.advanced_metrics.consistency_warning ? (
-                                                        <p className="text-[10px] text-amber-500 flex items-center gap-1">
-                                                            <AlertTriangle className="w-3 h-3" />
-                                                            {result.advanced_metrics.consistency_warning}
-                                                        </p>
-                                                    ) : (
-                                                        <p className="text-[10px] text-[#52525b]">
-                                                            {result.advanced_metrics.consistency_score >= 0.7 ? "Sonuçlar yüksek tutarlılık gösteriyor" : "Sonuçları gözden geçirin"}
-                                                        </p>
-                                                    )}
-                                                </div>
-                                            )}
-
-                                            {/* CoT Mode */}
-                                            {result.advanced_metrics.cot_enabled && (
-                                                <div className="p-4 bg-[#09090b] rounded-xl border border-purple-500/20 space-y-2">
-                                                    <span className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest">Chain-of-Thought</span>
-                                                    <div className="flex items-center gap-2">
-                                                        <div className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
-                                                        <span className="text-sm font-semibold text-purple-400">Aktif</span>
-                                                    </div>
-                                                    <p className="text-[10px] text-[#52525b]">
-                                                        Adım adım düşünme modu ile analiz yapıldı
-                                                    </p>
+                                            {result.advanced_metrics?.consistency_score !== undefined && (
+                                                <div className="flex items-center justify-between">
+                                                    <span className="text-xs text-[#a1a1aa]">Tutarlılık</span>
+                                                    <span className="text-sm font-bold text-[#fafafa]">%{Math.round(result.advanced_metrics.consistency_score * 100)}</span>
                                                 </div>
                                             )}
                                         </div>
-                                    </div>
-                                )}
+                                    )}
 
-                                {/* Critic Review (AI Feedback Loop) */}
-                                {result.critic_review && result.critic_review.status !== 'ok' && (
-                                    <div className={cn(
-                                        "p-8 rounded-2xl border-2 shadow-2xl space-y-6",
-                                        result.critic_review.status === 'error' ? "bg-red-500/5 border-red-500/20" : "bg-amber-500/5 border-amber-500/20"
-                                    )}>
-                                        <div className="flex items-center gap-4">
-                                            <div className={cn(
-                                                "p-3 rounded-xl border mb-2",
-                                                result.critic_review.status === 'error' ? "bg-red-500/10 border-red-500/20 text-red-500" : "bg-amber-500/10 border-amber-500/20 text-amber-500"
-                                            )}>
-                                                <GraduationCap className="w-6 h-6" />
-                                            </div>
-                                            <div>
-                                                <h4 className={cn("text-lg font-bold tracking-tight mb-1", result.critic_review.status === 'error' ? "text-red-500" : "text-amber-500")}>
-                                                    {result.critic_review.status === 'error' ? "Eleştirmen AI: Kritik Sorunlar" : "Eleştirmen AI: İyileştirme Önerileri"}
-                                                </h4>
-                                                <p className="text-xs text-[#71717a] font-medium leading-none">Analiz süreci denetlendi ve iyileştirme kalemleri belirlendi.</p>
-                                            </div>
+                                    {/* Cost Summary (Compact) */}
+                                    <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4 shadow-sm space-y-3">
+                                        <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest mb-2 border-b border-[#27272a] pb-2">Maliyet Özeti</h3>
+
+                                        <div className="flex justify-between items-center text-xs">
+                                            <span className="text-[#71717a]">Ara Toplam</span>
+                                            <span className="text-[#fafafa] font-mono">{subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL</span>
                                         </div>
-
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            {result.critic_review.issues.map((issue, idx) => (
-                                                <div key={idx} className="p-4 bg-[#09090b]/50 rounded-xl border border-[#27272a] space-y-2 group hover:border-blue-500/30 transition-colors">
-                                                    <div className="flex items-center justify-between">
-                                                        <span className={cn(
-                                                            "text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-widest",
-                                                            issue.severity === 'critical' ? "bg-red-500/20 text-red-500 border border-red-500/30" : "bg-amber-500/20 text-amber-500 border border-amber-500/30"
-                                                        )}>
-                                                            {issue.category}
-                                                        </span>
-                                                        {issue.severity === 'critical' && <XCircle className="w-3 h-3 text-red-500" />}
-                                                    </div>
-                                                    <p className="text-sm text-[#fafafa] font-medium leading-relaxed">{issue.message}</p>
-                                                    {issue.suggestion && (
-                                                        <div className="pt-2 flex items-center gap-2 text-[11px] text-[#71717a] italic">
-                                                            <Sparkles className="w-3 h-3 text-blue-500 shrink-0" />
-                                                            <span className="flex-1">💡 {issue.suggestion}</span>
-                                                            {["Eksik Kalem", "Eksik Malzeme", "Öğrenilmiş Kural"].includes(issue.category) && (
-                                                                <button
-                                                                    onClick={() => handleLearnRule(issue)}
-                                                                    className="not-italic bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded-lg px-2.5 py-1 text-[10px] whitespace-nowrap transition-colors shrink-0"
-                                                                    title="Bu düzeltmeyi kural olarak kaydet"
-                                                                >
-                                                                    + Kural Yap
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            ))}
+                                        <div className="flex justify-between items-center text-xs">
+                                            <span className="text-[#71717a]">%25 Kar/Gider</span>
+                                            <span className="text-blue-400 font-mono">{overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL</span>
                                         </div>
-                                    </div>
-                                )}
-
-                                {/* Explanation */}
-                                <div className="bg-blue-900/10 border border-blue-500/20 rounded-xl p-6">
-                                    <div className="flex items-start">
-                                        <Info className="w-5 h-5 text-blue-500 mr-3 mt-0.5 flex-shrink-0" />
-                                        <div className="text-blue-400 text-sm leading-relaxed whitespace-pre-wrap">
-                                            {result.explanation}
-                                        </div>
-                                    </div>
-                                </div>
-
-                                {/* Technical Description (Tarif) */}
-                                {result.technical_description && (
-                                    <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-6">
-                                        <div className="flex items-start">
-                                            <FileText className="w-5 h-5 text-[#a1a1aa] mr-3 mt-0.5 flex-shrink-0" />
-                                            <div className="space-y-2">
-                                                <h4 className="text-sm font-bold text-white uppercase tracking-tight">Teknik Tarif / Yapım Şartları</h4>
-                                                <div className="text-[#a1a1aa] text-sm leading-relaxed italic whitespace-pre-wrap">
-                                                    {result.technical_description}
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Detail Table */}
-                                <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] overflow-hidden">
-                                    <div className="p-6 border-b border-[#27272a] flex items-center justify-between bg-black/20">
-                                        <div className="flex items-center gap-3">
-                                            <Table className="w-5 h-5 text-blue-500" />
-                                            <h3 className="text-sm font-bold text-[#fafafa] uppercase tracking-widest leading-none">Analiz Detay Cetveli</h3>
-                                        </div>
-                                        <button
-                                            onClick={addNewComponent}
-                                            className="px-4 py-2 bg-[#27272a] text-[#fafafa] rounded-xl border border-[#3f3f46] hover:bg-[#3f3f46] transition-all text-xs font-bold flex items-center gap-2 group active:scale-95"
-                                        >
-                                            <Plus className="w-3 h-3 text-blue-500 group-hover:scale-125 transition-transform" />
-                                            KALEM EKLE
-                                        </button>
-                                    </div>
-                                    <div className="p-1">
-                                        <AnalysisTable
-                                            data={(result.analysis_data && result.analysis_data.components && result.analysis_data.components.length > 0)
-                                                ? result.analysis_data
-                                                : {
-                                                    poz_no: "Y.ANALİZ",
-                                                    name: analysisName || description,
-                                                    unit: displayUnit,
-                                                    components: result.components.map(c => ({
-                                                        type: c.type,
-                                                        code: c.code,
-                                                        name: c.name,
-                                                        unit: c.unit,
-                                                        quantity: c.quantity.toString(),
-                                                        price: c.unit_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                        total: c.total_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 })
-                                                    })),
-                                                    totals: {
-                                                        subtotal: subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                        profit: overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                        grand_total: grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                        label: `1 ${displayUnit} Fiyatı`
-                                                    }
-                                                }}
-                                            description={result.technical_description || result.explanation}
-                                        />
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Right Column: Actions & Summary */}
-                            <div className="space-y-8">
-                                {/* Quick Actions Card */}
-                                <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-8 space-y-6 sticky top-24">
-                                    <div className="flex items-center gap-2">
-                                        <Calculator className="w-4 h-4 text-blue-500" />
-                                        <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none">İşlem Merkezi</h3>
-                                    </div>
-
-                                    <div className="space-y-4">
-                                        <button
-                                            onClick={handleSaveAnalysis}
-                                            disabled={saveLoading}
-                                            className="w-full flex items-center justify-between px-6 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl transition-all font-bold shadow-xl shadow-blue-900/20 group active:scale-[0.98]"
-                                        >
-                                            <div className="flex items-center gap-3">
-                                                {saveLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
-                                                Analizi Kaydet
-                                            </div>
-                                            <ArrowRight className="w-4 h-4 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
-                                        </button>
-
-                                        <button
-                                            onClick={handleSaveAsProject}
-                                            disabled={saveLoading}
-                                            className="w-full flex items-center justify-between px-6 py-4 bg-[#27272a] hover:bg-[#3f3f46] text-[#fafafa] rounded-2xl transition-all font-bold border border-[#3f3f46] group active:scale-[0.98]"
-                                        >
-                                            <div className="flex items-center gap-3">
-                                                <Box className="w-5 h-5 text-blue-500" />
-                                                Proje Olarak Aktar
-                                            </div>
-                                            <ArrowRight className="w-4 h-4 opacity-30 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
-                                        </button>
-
-                                        <div className="grid grid-cols-3 gap-3">
-                                            <button
-                                                onClick={handleExportExcel}
-                                                className="flex flex-col items-center justify-center p-4 bg-[#18181b] hover:bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-2xl border border-[#27272a] transition-all gap-2 group active:scale-[0.98]"
-                                            >
-                                                <FileDown className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                                                <span className="text-[10px] font-bold uppercase tracking-widest">Excel</span>
-                                            </button>
-                                            <button
-                                                onClick={handleCopyAsMarkdown}
-                                                className="flex flex-col items-center justify-center p-4 bg-[#18181b] hover:bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-2xl border border-[#27272a] transition-all gap-2 group active:scale-[0.98]"
-                                            >
-                                                <Copy className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                                                <span className="text-[10px] font-bold uppercase tracking-widest">Kopyala</span>
-                                            </button>
-                                            <button
-                                                onClick={() => { setFeedbackModalTab('ai'); setShowFeedbackModal(true); }}
-                                                className="flex flex-col items-center justify-center p-4 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 hover:text-purple-300 rounded-2xl border border-purple-500/20 transition-all gap-2 group active:scale-[0.98]"
-                                            >
-                                                <Sparkles className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                                                <span className="text-[10px] font-bold uppercase tracking-widest">Öneriler</span>
-                                            </button>
-                                        </div>
-                                    </div>
-
-                                    <div className="pt-6 border-t border-[#27272a] space-y-4">
-                                        <div className="flex items-center gap-2 mb-2">
-                                            <Calculator className="w-4 h-4 text-[#52525b]" />
-                                            <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none italic">Fiyat Özeti</h3>
-                                        </div>
-
-                                        <div className="space-y-3">
-                                            <div className="flex justify-between items-center text-xs">
-                                                <span className="text-[#71717a]">Gider Toplamı</span>
-                                                <span className="text-[#fafafa] font-mono leading-none tracking-tighter">
-                                                    {subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-[9px] opacity-50 italic">TL</span>
-                                                </span>
-                                            </div>
-                                            <div className="flex justify-between items-center text-xs">
-                                                <span className="text-[#71717a]">Genel Gider (%25)</span>
-                                                <span className="text-[#71717a] font-mono leading-none tracking-tighter text-blue-500/70">
-                                                    {overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-[9px] opacity-50 italic">TL</span>
-                                                </span>
-                                            </div>
-                                            <div className="pt-3 border-t border-dashed border-[#27272a] flex flex-col gap-1">
-                                                <div className="text-[10px] font-bold text-blue-500 uppercase tracking-[0.2em] leading-none mb-1">Birim Fiyat ({displayUnit})</div>
-                                                <div className="text-3xl font-black text-[#fafafa] tracking-tighter leading-none">
-                                                    {grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-sm font-bold text-blue-500">TL</span>
-                                                </div>
-                                            </div>
+                                        <div className="pt-2 border-t border-dashed border-[#27272a] flex justify-between items-end">
+                                            <span className="text-xs font-bold text-[#fafafa]">TOPLAM</span>
+                                            <span className="text-lg font-black text-blue-500 font-mono">{grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} TL</span>
                                         </div>
                                     </div>
                                 </div>
