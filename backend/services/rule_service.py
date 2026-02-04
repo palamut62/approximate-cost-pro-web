@@ -1,11 +1,17 @@
 import json
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from pathlib import Path
+from typing import List, Dict
 from database import DatabaseManager
 
 class RuleService:
     def __init__(self, db_manager: DatabaseManager = None):
-        self.db = db_manager if db_manager else DatabaseManager()
+        if db_manager:
+            self.db = db_manager
+        else:
+            # Absolute path: project root / data.db (backend/services/ → ../../data.db)
+            db_path = str(Path(__file__).parent.parent.parent / "data.db")
+            self.db = DatabaseManager(db_path)
 
     def add_rule(self, trigger_keywords: List[str], required_items: List[Dict], condition_text: str) -> int:
         """
@@ -69,9 +75,8 @@ class RuleService:
             if not keywords:
                 continue
                 
-            # Tüm anahtar kelimeler tanımda geçiyor mu?
-            # (Basit mantık: AND. İleride OR veya karmaşık mantık eklenebilir)
-            if any(kw.lower() in desc_lower for kw in keywords):
+            # Tüm anahtar kelimeler tanımda geçmeli (AND logic)
+            if all(kw.lower() in desc_lower for kw in keywords):
                 matches.append(rule)
                 
         return matches

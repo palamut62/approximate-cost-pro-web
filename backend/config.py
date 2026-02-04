@@ -65,6 +65,22 @@ class ValidationConfig:
     CONCRETE_WASTE_RATE: float = 0.02  # %2
     FORMWORK_WASTE_RATE: float = 0.10  # %10
 
+    # Tipik sektör oranları (referans) — ton/m³, m²/m³
+    REBAR_PER_CONCRETE: tuple = (0.08, 0.15)     # ton/m³ (80-150 kg/m³)
+    FORMWORK_PER_CONCRETE: tuple = (5, 8)         # m²/m³
+    MORTAR_PER_WALL_M2: tuple = (0.02, 0.05)     # m³/m²
+
+    # Tipik m² fiyat aralıkları (TL, 2025 referans — min, max)
+    PRICE_RANGES_PER_M2: Dict[str, tuple] = {
+        'duvar':      (1500, 6000),
+        'döşeme':     (2500, 8000),
+        'betonarme':  (3500, 10000),
+        'seramik':    (800, 4000),
+        'boya':       (150, 500),
+        'sıva':       (800, 3000),
+        'çatı':       (2000, 6000),
+    }
+
 
 class LogConfig:
     """Logging konfigürasyonu"""

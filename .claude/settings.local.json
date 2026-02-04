@@ -20,7 +20,9 @@
       "Bash(kill:*)",
       "Bash(head:*)",
       "Bash(wc:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(du:*)",
+      "Bash(python:*)"
     ]
   }
 }

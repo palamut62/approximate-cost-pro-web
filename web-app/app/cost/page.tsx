@@ -20,6 +20,16 @@ type CostItem = {
     total_price: number;
 }
 
+// Parses price strings that may be in Turkish locale ("5.858,145") or plain English ("5858.145")
+function parsePrice(val: string | number | undefined): number {
+    if (val === undefined || val === null || val === '') return 0;
+    if (typeof val === 'number') return val;
+    // Contains comma → Turkish format: remove dot-thousands, swap comma to dot
+    if (val.includes(',')) return parseFloat(val.replace(/\./g, '').replace(',', '.')) || 0;
+    // No comma → plain number ("5858.145" or "5858")
+    return parseFloat(val) || 0;
+}
+
 function CostEstimatorContent() {
     const searchParams = useSearchParams();
     const projectId = searchParams.get('id');
@@ -67,8 +77,8 @@ function CostEstimatorContent() {
                 description: poz.description,
                 unit: poz.unit,
                 quantity: 1,
-                unit_price: parseFloat(poz.unit_price?.replace(/\./g, '').replace(',', '.') || '0'),
-                total_price: parseFloat(poz.unit_price?.replace(/\./g, '').replace(',', '.') || '0')
+                unit_price: parsePrice(poz.unit_price),
+                total_price: parsePrice(poz.unit_price)
             }));
             setItems(mapped);
         }
@@ -129,9 +139,7 @@ function CostEstimatorContent() {
             description: poz.description || "Yeni Kalem",
             unit: poz.unit || "adet",
             quantity: 1,
-            unit_price: typeof poz.unit_price === 'number'
-                ? poz.unit_price
-                : parseFloat(String(poz.unit_price || '0').replace(/\./g, '').replace(',', '.')),
+            unit_price: parsePrice(poz.unit_price),
             total_price: 0
         };
         newItem.total_price = newItem.quantity * newItem.unit_price;

@@ -3,9 +3,60 @@ from pydantic import BaseModel
 from typing import List, Optional
 from database import DatabaseManager
 from pathlib import Path
+import logging
 
 router = APIRouter(prefix="/feedback", tags=["AI Feedback"])
 db = DatabaseManager(str(Path(__file__).parent.parent.parent / "data.db"))
+logger = logging.getLogger("feedback")
+
+# Kategori bazlı zorunlu bileşen kuralları (otomatik çıkarım için)
+CATEGORY_TRIGGERS = {
+    "taş duvar":      {"triggers": ["taş", "duvar"], "items": ["iskele", "barbakan", "harç", "nakliye"]},
+    "betonarme":      {"triggers": ["betonarme"],     "items": ["demir", "kalıp", "paspayı", "nakliye"]},
+    "tuğla duvar":    {"triggers": ["tuğla", "duvar"], "items": ["iskele", "harç", "nakliye"]},
+    "sıva":           {"triggers": ["sıva"],           "items": ["iskele", "çimento", "kum", "nakliye"]},
+    "boya":           {"triggers": ["boya"],           "items": ["astar", "iskele", "nakliye"]},
+    "kazı":           {"triggers": ["kazı"],           "items": ["nakliye"]},
+    "boru döşeme":    {"triggers": ["boru"],           "items": ["yatak", "nakliye"]},
+}
+
+
+def _extract_rule_from_feedback(original_prompt: str, correction_type: str, correct_components: list) -> Optional[dict]:
+    """
+    missing_item feedback'inden otomatik kural çıkar.
+    Örnek: "taş duvar" + missing "iskele" → rule: taş+duvar → iskele zorunlu
+    """
+    if correction_type != "missing_item":
+        return None
+
+    prompt_lower = original_prompt.lower()
+
+    # Hangi kategoriye ait bu feedback?
+    for category, cat_info in CATEGORY_TRIGGERS.items():
+        triggers = cat_info["triggers"]
+        if all(t in prompt_lower for t in triggers):
+            # Missing item: correct_components'tan, CATEGORY_TRIGGERS'deki zorunlu listede olmayan yeni items bul
+            # Feedback'in düzelttiği item: correct_components'ta olan ama
+            # CATEGORY_TRIGGERS'deki zorunlu listede olmayan yeni kalemler
+            new_required = []
+            for comp in correct_components:
+                comp_name = comp.get("name", "").lower()
+                already_known = any(item in comp_name for item in cat_info["items"])
+                if not already_known and comp.get("type", "").lower() == "malzeme":
+                    new_required.append({"name": comp.get("name", ""), "type": "Malzeme"})
+
+            # Eğer yeni zorunlu kalem bulunamadıysa, mevcut zorunlu listesi üzerinden kural yaz
+            if not new_required:
+                new_required = [{"name": item.capitalize(), "type": "Malzeme"} for item in cat_info["items"]]
+
+            display_names = [item["name"] for item in new_required]
+            return {
+                "trigger_keywords": triggers,
+                "required_items": new_required,
+                "condition_text": f"{category} imalatında zorunlu: {', '.join(display_names)}"
+            }
+
+    return None
 
 
 class ComponentSchema(BaseModel):
@@ -35,19 +86,12 @@ class FeedbackResponse(BaseModel):
 def create_feedback(feedback: FeedbackCreateSchema):
     """
     Kullanıcının AI düzeltmesini kaydet.
-
-    Bu düzeltme gelecekte benzer sorgularda AI'ya context olarak gönderilecek.
-
-    Düzeltme Tipleri:
-    - wrong_method: Yanlış yöntem (örn: elle yapım yerine makine ile yapım)
-    - missing_item: Eksik kalem (örn: nakliye eklenmemiş)
-    - wrong_price: Yanlış fiyat
-    - wrong_quantity: Yanlış miktar
-    - other: Diğer
+    SQLite'a kaydet → Vector DB'ye index'le → Otomatik kural çıkar.
     """
     try:
         components = [comp.dict() for comp in feedback.correct_components]
 
+        # 1. SQLite'a kaydet
         feedback_id = db.save_ai_feedback(
             original_prompt=feedback.original_prompt,
             original_unit=feedback.original_unit,
@@ -56,6 +100,37 @@ def create_feedback(feedback: FeedbackCreateSchema):
             correct_components=components,
             keywords=feedback.keywords
         )
+
+        # 2. Vector DB'ye semantic index ekle (async-safe, hata durumunda sil mi)
+        try:
+            from services.vector_db_service import VectorDBService
+            vector_service = VectorDBService()
+            vector_service.index_feedback({
+                "id": str(feedback_id),
+                "original_description": feedback.original_prompt,
+                "correction_type": feedback.correction_type,
+                "user_note": feedback.correction_description
+            })
+            logger.info(f"[FEEDBACK] Vector DB'ye indexlendi: feedback_id={feedback_id}")
+        except Exception as ve:
+            logger.warning(f"[FEEDBACK] Vector DB indexleme hatası (non-fatal): {ve}")
+
+        # 3. Otomatik kural çıkarımı (missing_item feedback'lerden)
+        rule_data = _extract_rule_from_feedback(
+            feedback.original_prompt,
+            feedback.correction_type,
+            components
+        )
+        if rule_data:
+            try:
+                rule_id = db.save_user_rule(
+                    trigger_keywords=rule_data["trigger_keywords"],
+                    required_items=rule_data["required_items"],
+                    condition_text=rule_data["condition_text"]
+                )
+                logger.info(f"[FEEDBACK] Otomatik kural oluşturuldu: rule_id={rule_id} — {rule_data['condition_text']}")
+            except Exception as re_err:
+                logger.warning(f"[FEEDBACK] Kural kaydetme hatası (non-fatal): {re_err}")
 
         return FeedbackResponse(
             id=feedback_id,

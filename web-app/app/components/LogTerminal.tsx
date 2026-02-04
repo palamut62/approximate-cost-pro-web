@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Terminal, X, ChevronDown, ChevronUp, Trash2, StopCircle, PlayCircle, Hash, Maximize2, Minimize2, Activity, Wifi, WifiOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -21,21 +21,30 @@ export default function LogTerminal() {
     const [autoScroll, setAutoScroll] = useState(true);
     const wsRef = useRef<WebSocket | null>(null);
     const scrollRef = useRef<HTMLDivElement>(null);
-    const [reconnectCount, setReconnectCount] = useState(0);
+    const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const reconnectAttemptRef = useRef(0);
+    const isComponentMountedRef = useRef(true);
     const isResizing = useRef(false);
 
-    useEffect(() => {
-        const connect = () => {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const host = 'localhost:8000';
+    // Stable connect function - doesn't change on re-renders
+    const connect = useCallback(() => {
+        if (!isComponentMountedRef.current) return;
+        if (wsRef.current?.readyState === WebSocket.OPEN) return;
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = 'localhost:8000';
+
+        try {
             const ws = new WebSocket(`${protocol}//${host}/api/ws/logs`);
 
             ws.onopen = () => {
+                if (!isComponentMountedRef.current) return;
                 setIsConnected(true);
-                setReconnectCount(0);
+                reconnectAttemptRef.current = 0;
             };
 
             ws.onmessage = (event) => {
+                if (!isComponentMountedRef.current) return;
                 try {
                     const data = JSON.parse(event.data);
                     const newLog: LogEntry = {
@@ -56,25 +65,49 @@ export default function LogTerminal() {
             };
 
             ws.onclose = () => {
+                if (!isComponentMountedRef.current) return;
                 setIsConnected(false);
-                const timeout = Math.min(1000 * Math.pow(2, reconnectCount), 30000);
-                setTimeout(() => {
-                    setReconnectCount(prev => prev + 1);
-                    connect();
-                }, timeout);
+
+                // Clear existing timeout
+                if (reconnectTimeoutRef.current) {
+                    clearTimeout(reconnectTimeoutRef.current);
+                }
+
+                // Fixed 5 second reconnection delay (prevents connection spam)
+                reconnectAttemptRef.current++;
+                reconnectTimeoutRef.current = setTimeout(() => {
+                    if (isComponentMountedRef.current) {
+                        connect();
+                    }
+                }, 5000);
+            };
+
+            ws.onerror = () => {
+                if (!isComponentMountedRef.current) return;
+                setIsConnected(false);
             };
 
             wsRef.current = ws;
-        };
+        } catch (error) {
+            console.error('[LogTerminal] WebSocket connection error:', error);
+        }
+    }, []);
 
+    useEffect(() => {
+        isComponentMountedRef.current = true;
         connect();
 
         return () => {
+            isComponentMountedRef.current = false;
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current);
+            }
             if (wsRef.current) {
                 wsRef.current.close();
+                wsRef.current = null;
             }
         };
-    }, [reconnectCount]);
+    }, [connect]);
 
     useEffect(() => {
         if (autoScroll && scrollRef.current) {

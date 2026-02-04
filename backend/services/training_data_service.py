@@ -1,4 +1,7 @@
 from pathlib import Path
+import json
+from typing import List, Dict, Any, Optional
+from difflib import SequenceMatcher
 from utils.logger import get_training_logger
 
 logger = get_training_logger()
@@ -6,7 +9,7 @@ logger = get_training_logger()
 
 class TrainingDataService:
     """
-    Eğitim verisini yönetir (egitim_verisi_FINAL_READY.jsonl).
+    Eğitim verisini yönetir (egitim_verisi_CLEANED.jsonl).
 
     Özellikler:
     - Direct Lookup: Tam eşleşme kontrolü

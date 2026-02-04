@@ -35,6 +35,8 @@ class AIAnalysisService:
         """Get model ID from settings unless manually overridden"""
         if self.model:
             return self.model
+        # Her çağrıda güncel settings'i oku
+        self.settings_service.reload_settings()
         return self.settings_service.get_model_for_task(task)
 
     def refine_feedback_description(self, text: str) -> str:
@@ -51,30 +53,16 @@ TALİMAT:
 - Sadece düzeltilmiş metni yaz, başka hiçbir şey ekleme.
 """
 
-        # OpenRouter or Gemini
         messages = [
             {"role": "system", "content": "Sen uzman bir inşaat mühendisisin."},
             {"role": "user", "content": prompt}
         ]
 
-        if self.openrouter_key:
-            try:
-                headers = {
-                    "Authorization": f"Bearer {self.openrouter_key}",
-                    "Content-Type": "application/json"
-                }
-                data = {
-                    "model": self.get_model("refine"),
-                    "messages": messages,
-                    "temperature": 0.3
-                }
-                response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=30)
-                response.raise_for_status()
-                return response.json()['choices'][0]['message']['content'].strip()
-            except Exception as e:
-                logger.error(f"Refine Error (OpenRouter): {e}")
-
-        return text # Hata durumunda orijinali döndür
+        try:
+            return self._submit_api_request(messages, model=self.get_model("refine"), temperature=0.3)
+        except Exception as e:
+            logger.error(f"Refine Feedback Error: {e}")
+            return text
 
     def refine_construction_request(self, text: str) -> str:
         """
@@ -123,26 +111,11 @@ KURALLAR:
             {"role": "user", "content": prompt}
         ]
 
-        if self.openrouter_key:
-            try:
-                headers = {
-                    "Authorization": f"Bearer {self.openrouter_key}",
-                    "Content-Type": "application/json"
-                }
-                data = {
-                    "model": self.get_model("refine"),
-                    "messages": messages,
-                    "temperature": 0.4
-                }
-                response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=30)
-                response.raise_for_status()
-                return response.json()['choices'][0]['message']['content'].strip()
-            except Exception as e:
-                print(f"Refine Request Error (OpenRouter): {e}")
-
-
-
-        return text  # Hata durumunda orijinali döndür
+        try:
+            return self._submit_api_request(messages, model=self.get_model("refine"), temperature=0.4)
+        except Exception as e:
+            logger.error(f"Refine Request Error: {e}")
+            return text
 
     def review_analysis(self, analysis_data: Dict[str, Any], description: str) -> Dict[str, Any]:
         """
@@ -168,18 +141,72 @@ DENETİM VE ELEŞTİRİ KURALLARI:
    - Örneğin: "Betonarme" denmişse, DEMİR ve KALIP mutlaka olmalıdır.
    - Örneğin: "Duvar" varsa, HARÇ mutlaka olmalıdır (harçsız duvar hariç).
 
-2. EKSİK KALEM KONTROLÜ:
-   - İşin tamamlanması için zorunlu olan yan imalatlar var mı?
-   - Örn: Kazı varsa dolgu veya nakliye var mı?
-   - Örn: Boya varsa astar var mı?
+2. EKSİK KALEM KONTROLÜ - İMALAT TÜRÜNE GÖRE ZORUNLU BİLEŞENLER:
+
+   🧱 TAŞ DUVAR varsa KONTROL ET:
+      □ Taş malzeme var mı?
+      □ Harç (çimento + kum) var mı?
+      □ İSKELE var mı? (2m üstü yüksekliklerde ZORUNLU!)
+      □ BARBAKAN var mı? (istinat duvarlarında su tahliyesi için ZORUNLU!)
+      □ İşçilik var mı?
+      □ Nakliye var mı?
+
+   🏗️ BETONARME varsa KONTROL ET:
+      □ Beton var mı?
+      □ Demir/donatı var mı? (ZORUNLU!)
+      □ Kalıp var mı?
+      □ Paspayı var mı?
+      □ İşçilik var mı?
+      □ Nakliye var mı?
+
+   🧱 TUĞLA/BLOK DUVAR varsa KONTROL ET:
+      □ Tuğla/Blok var mı?
+      □ Harç var mı?
+      □ İSKELE var mı? (2m üstü)
+      □ İşçilik var mı?
+      □ Nakliye var mı?
+
+   🎨 SIVA varsa KONTROL ET:
+      □ Çimento var mı?
+      □ Kum var mı?
+      □ İSKELE var mı? (tavan/yüksek duvar)
+      □ İşçilik var mı?
+      □ Nakliye var mı?
+
+   🖌️ BOYA varsa KONTROL ET:
+      □ ASTAR var mı? (ZORUNLU - astar olmadan boya yapılmaz!)
+      □ Boya var mı?
+      □ İSKELE var mı? (yüksek yüzeyler)
+      □ İşçilik var mı?
+
+   ⛏️ KAZI varsa KONTROL ET:
+      □ Kazı işçiliği/makinesi var mı?
+      □ NAKLİYE var mı? (hafriyat taşıma ZORUNLU!)
+
+   🚰 BORU DÖŞEME varsa KONTROL ET:
+      □ Boru var mı?
+      □ Ek parçaları var mı?
+      □ Yatak malzemesi (kum) var mı?
+      □ İşçilik var mı?
+      □ Nakliye var mı?
 
 3. FİYAT VE MİKTAR TUTARLILIĞI:
    - Miktarlar gerçekçi mi? (Örn: 1 m³ beton için 2 m³ kum yazılmışsa HATA)
    - Fiyatlar güncel piyasa/ÇŞB rayiçleriyle uyumlu mu? (Aşırı düşük/yüksek mi?)
+   - İşçilik süreleri makul mü? (Örn: 1 m² duvar için 10 saat işçilik abartılı)
 
 4. ŞÜPHELİ DURUMLAR:
    - Aynı iş için hem makine hem el işçiliği mükerrer yazılmış mı?
    - Uyumsuz birimler var mı? (Metre tül işi m³ olarak hesaplanmış mı?)
+   - İskele unutulmuş mu? (Yüksek imalatlarda kritik hata!)
+   - Nakliye unutulmuş mu? (Her malzeme için nakliye olmalı — HAZIR BETON HARİÇ!)
+
+5. KRİTİK EKSİKLİKLER (MUTLAKA BİLDİR):
+   - Taş duvarda barbakan eksikse → KRİTİK HATA
+   - Boyada astar eksikse → KRİTİK HATA
+   - Betonarmede demir eksikse → KRİTİK HATA
+   - Yüksek imalatta iskele eksikse → KRİTİK HATA
+   - Kazıda nakliye eksikse → KRİTİK HATA
 
 ═══════════════════════════════════════════════════════════════
 ÇIKTI FORMATI (SADECE JSON):
@@ -203,37 +230,24 @@ Eğer analiz MÜKEMMEL ise "issues" listesini boş bırak ve status="ok" döndü
 
         errors = []
 
-        # Try OpenRouter first (LLM call)
-        if self.openrouter_key:
-            try:
-                headers = {
-                    "Authorization": f"Bearer {self.openrouter_key}",
-                    "Content-Type": "application/json",
-                     "HTTP-Referer": "https://approximatecostpro.com",
-                     "X-Title": "Approximate Cost Pro"
-                }
-                data = {
-                    "model": self.get_model("critic"), 
-                    "messages": [
-                        {"role": "system", "content": "Sen hata affetmeyen, titiz bir Başmühendissin. JSON formatında yanıt verirsin."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.2
-                }
-                logger.info("LLM Critic (OpenRouter) çağrılıyor...")
-                response = requests.post(f"{self.base_url}/chat/completions", headers=headers, json=data, timeout=60)
-                response.raise_for_status()
-                content = response.json()['choices'][0]['message']['content']
-                return self._process_response(content)
-            except Exception as e:
-                errors.append(f"OpenRouter Critic Error: {e}")
-
-        # Try Gemini (LLM call)
-            except Exception as e:
-                errors.append(f"OpenRouter Critic Error: {e}")
+        try:
+            messages = [
+                {"role": "system", "content": "Sen hata affetmeyen, titiz bir Başmühendissin. JSON formatında yanıt verirsin."},
+                {"role": "user", "content": prompt}
+            ]
+            logger.info("LLM Critic (OpenRouter) çağrılıyor...")
+            content = self._submit_api_request(
+                messages, 
+                model=self.get_model("critic"), 
+                temperature=0.2,
+                response_format={"type": "json_object"}
+            )
+            return self._process_response(content)
+        except Exception as e:
+            errors.append(f"Critic Error: {e}")
+            logger.error(f"Critic Failed: {e}")
 
         # If LLM fails, return empty result (let rule-based system handle it)
-        print(f"LLM Critic Failed: {errors}")
         return {"status": "ok", "issues": [], "general_comment": "LLM servisi yanıt vermedi, yerel kurallar geçerli."}
 
     def generate_analysis(
@@ -256,34 +270,33 @@ Eğer analiz MÜKEMMEL ise "issues" listesini boş bırak ve status="ok" döndü
             temperature: LLM temperature (None ise varsayılan 0.1)
         """
         prompt = self._build_professional_prompt(description, unit, context_data)
-        errors = []
-
-        # Try OpenRouter first if key exists (with retry)
-        if self.openrouter_key:
-            for attempt in range(3):
-                try:
-                    logger.info(f"OpenRouter API çağrısı (deneme {attempt + 1}/3)")
-                    return self._call_openrouter(prompt, model=model, temperature=temperature)
-                except APIError as e:
-                    errors.append(f"OpenRouter: {e}")
-                    if e.retryable and attempt < 2:
-                        wait_time = (attempt + 1) * 2  # 2, 4 saniye
-                        logger.warning(f"Retry beklemesi: {wait_time}s")
-                        time.sleep(wait_time)
-                        continue
-                    break
-                except Exception as e:
-                    errors.append(f"OpenRouter: {e}")
-                    logger.error(f"OpenRouter hatası: {e}")
-                    break
-
-        # Fallback to Gemini if key exists (with retry)
-                    logger.error(f"OpenRouter hatası: {e}")
-                    break
-
-        # All providers failed
-        error_summary = "; ".join(errors) if errors else "API anahtarı bulunamadı"
-        raise Exception(f"AI servisleri başarısız: {error_summary}")
+        
+        try:
+            messages = [
+                {
+                    "role": "system",
+                    "content": "Sen Türkiye'de çalışan Yaklaşık Maliyet ve İhale Uzmanı bir İnşaat Mühendisisin. 4734 sayılı Kamu İhale Kanunu, ÇŞB/DSİ/Karayolları birim fiyat analizleri ve resmî işçilik normlarına hâkimsin. İhale dosyaları hazırlama konusunda 20+ yıl deneyime sahipsin. Poz analizleri oluştururken:\n\n• Malzeme miktarlarını ÇŞB resmî analizlerinden alırsın\n• Fire oranlarını KİK kabul gören değerlerde uygularsın (Demir %3-5, Beton %1-2, Kalıp %5-10)\n• İşçilik sürelerini adam/saat formatında ve resmî normlara uygun yazarsın\n• Makine kapasitelerini ve sürelerini gerçekçi hesaplarsın\n• Emsal poz referanslarını mutlaka kullanırsın\n• Nakliye mesafesini 20 km kabul edersin\n• Genel gider + kâr (%25) birim fiyatlara yedirilmiştir, ayrı satır yazmassın\n\nSadece JSON formatında, aşırı düşük sorgulamasında geçebilecek kalitede, gerçekçi ve piyasa rayiçlerine uygun analiz yanıtları verirsin."
+                },
+                {"role": "user", "content": prompt}
+            ]
+            
+            # Resolve model
+            actual_model = model or self.get_model("analyze")
+            logger.info(f"Analiz oluşturuluyor... (Model: {actual_model})")
+            
+            content = self._submit_api_request(
+                messages, 
+                model=actual_model, 
+                temperature=temperature if temperature is not None else 0.1,
+                max_tokens=4096,
+                response_format={"type": "json_object"}
+            )
+            return self._process_response(content)
+            
+        except Exception as e:
+            error_msg = f"AI Analiz Hatası: {e}"
+            logger.error(error_msg)
+            raise Exception(error_msg)
 
     def _build_professional_prompt(self, description: str, unit: str, context_data: str) -> str:
         """
@@ -388,6 +401,20 @@ Sadece HAZIR BETON poz numarasını kullan!
 ⚠️ ASLA HAZIR BETON + ÇİMENTO/KUM/ÇAKIL BIRLIKTE OLMASIN!
 Bu mantıken yanlış! Hazır beton zaten karıştırılmış gelir.
 
+⚠️ KRİTİK UYARI 2.1 - HAZIR BETON NAKLİYESİ:
+🚫 HAZIR BETON (santral/pompa) için AYRICA "Beton Nakliyesi" YAZMA!
+   Hazır beton transmikser/pompalar ile doğrudan inşaat sahasına taşınır.
+   Nakliye fiyatı HAZIR BETON birim fiyatına ZATen DAHİLdir.
+✅ Diğer malzeme nakliyelerini (demir, tuğla, çimento vb.) yazın.
+
+🧱 ŞANTİYE BETONU (çimento+kum+çakıl karışım) için ise her bileşenin
+   nakliyesi AYRi AYRI yazılmalıdır (çimento nakliyesi, kum nakliyesi, çakıl nakliyesi).
+
+⚠️ KRİTİK UYARI 2.2 - "BETON" KELİMESİ VARSAYIM:
+   Eğer kullanıcı sadece "beton" dedi, "santral" / "hazır beton" / "pompa" KEYFİ
+   IFADE YOKSA → ŞANTİYE BETONU (çimento+kum+çakıl) varsayılır!
+   Hazır beton SADECE açıkça talep edildiğinde kullanılır.
+
 ═══════════════════════════════════════════════════════════════
 
 ⚠️ KRİTİK UYARI 2.5 - GROBETON (AYRI MALZEME!):
@@ -442,6 +469,89 @@ Bu mantıken yanlış! Hazır beton zaten karıştırılmış gelir.
 ✅ "Düz beton döşeme" → BETON + KALIP (demir yok!)
 ❌ "Betonarme temel" → BETON + DEMİR + KALIP
 ❌ "Hasır donatılı döşeme" → BETON + DEMİR + KALIP
+
+═══════════════════════════════════════════════════════════════
+
+⚠️ KRİTİK UYARI 4 - İMALAT TÜRÜNE GÖRE ZORUNLU BİLEŞENLER:
+
+🧱 TAŞ DUVAR İMALATI:
+   ZORUNLU BİLEŞENLER:
+   ✓ Taş malzeme (moloz taş, kesme taş, kaba yonu taş vb.)
+   ✓ Harç malzemeleri (çimento + kum + su)
+   ✓ İSKELE (2 metre üstü yüksekliklerde ZORUNLU!)
+   ✓ BARBAKAN (su tahliye borusu - her 2-3 m²'de 1 adet)
+   ✓ Duvarcı ustası + yardımcısı işçiliği
+   ✓ Nakliye (taş + çimento + kum ayrı ayrı)
+
+   ⚠️ TAŞ DUVARDA İSKELE UNUTULMAZ! Yüksek duvar = İskele şart!
+   ⚠️ BARBAKAN: Istinat/bahçe duvarlarında su basıncını azaltır, ZORUNLU!
+
+🏗️ BETONARME İMALATI:
+   ZORUNLU BİLEŞENLER:
+   ✓ Beton (hazır veya şantiye karışımı)
+   ✓ Nervürlü demir (donatı) - ASLA UNUTMA!
+   ✓ Kalıp (düz/özel)
+   ✓ Paspayı (beton örtüsü için)
+   ✓ Tel (bağlama teli)
+   ✓ İşçilik (betoncu + demirci + kalıpçı)
+   ✓ Nakliye
+
+🧱 TUĞLA/BLOK DUVAR:
+   ZORUNLU BİLEŞENLER:
+   ✓ Tuğla/Blok malzeme
+   ✓ Harç (çimento + kum + su)
+   ✓ İSKELE (2 metre üstü)
+   ✓ Hatıl demiri (kapı/pencere üstü)
+   ✓ İşçilik
+   ✓ Nakliye
+
+🎨 SIVA İŞLERİ:
+   ZORUNLU BİLEŞENLER:
+   ✓ Çimento
+   ✓ Kum (ince kum)
+   ✓ Su
+   ✓ İSKELE (tavan ve yüksek duvarlar için)
+   ✓ Çelik hasır/tela (gerekirse - çatlak önleyici)
+   ✓ Köşe profili (dış köşeler için)
+   ✓ İşçilik (sıvacı usta + yardımcı)
+   ✓ Nakliye
+
+🖌️ BOYA İŞLERİ:
+   ZORUNLU BİLEŞENLER:
+   ✓ ASTAR (zemin astarı - ASLA UNUTMA!)
+   ✓ Boya (iç/dış cephe)
+   ✓ Macun (pürüz giderici - gerekirse)
+   ✓ İSKELE (yüksek yüzeyler)
+   ✓ İşçilik
+   ✓ Nakliye
+
+⛏️ KAZI İŞLERİ:
+   ZORUNLU BİLEŞENLER:
+   ✓ Kazı işçiliği/makinesi
+   ✓ NAKLİYE (hafriyat taşıma) - ZORUNLU!
+   ✓ Dolgu (gerekirse - geri dolgu)
+   ✓ Sıkıştırma (dolgu yapılıyorsa)
+
+🚰 BORU DÖŞEME:
+   ZORUNLU BİLEŞENLER:
+   ✓ Boru malzemesi
+   ✓ Ek parçaları (dirsek, manşon, conta vb.)
+   ✓ Yatak malzemesi (kum/çakıl)
+   ✓ Kazı (boru yatağı)
+   ✓ Dolgu ve sıkıştırma
+   ✓ İşçilik
+   ✓ Nakliye
+
+🏠 ÇATI İŞLERİ:
+   ZORUNLU BİLEŞENLER:
+   ✓ Örtü malzemesi (kiremit, panel vb.)
+   ✓ Altlık/şıltı
+   ✓ Ahşap/çelik konstrüksiyon
+   ✓ İSKELE (kesinlikle ZORUNLU!)
+   ✓ Çatı yalıtımı
+   ✓ Bağlantı elemanları
+   ✓ İşçilik
+   ✓ Nakliye
 
 ═══════════════════════════════════════════════════════════════
 
@@ -505,7 +615,8 @@ Bu mantıken yanlış! Hazır beton zaten karıştırılmış gelir.
      • Miktarları emsal pozdan uyarla, sıfırdan uydurma!
 
 3. NAKLİYE HESABI (4734 KİK - varsayılan 20 km):
-   • Her malzeme için nakliye kalemi ZORUNLU
+   • Her malzeme için nakliye kalemi ZORUNLU — HAZIR BETON HARİÇ!
+     (Hazır beton nakliyesi birim fiyata dahil, ayrıca yazılmaz)
    • Nakliye mesafesi: 20 km (varsayılan)
    • Birim: ton veya m³
    • Yoğunluklar (standart değerler):
@@ -556,13 +667,54 @@ SADECE aşağıdaki JSON formatında yanıt ver, başka hiçbir şey yazma:
 • Genel gider ve yüklenici kârı (%25) birim fiyatlara yedirilmiştir
 • Bu analiz ihale dosyalarında kullanıma uygun formattadır
 • Emsal poz referansları veritabanından alınmıştır",
-  "technical_specification": "Beton üretimine uygun komple beton tesisinde (asgari 60m³/sa kapasiteli...) standardına uygun...
-  
-Ölçü: Projedeki boyutlar üzerinden hesaplanır.
-  
-Not: 
-1) Üretilen betonun TSE belgeli olması zorunludur.
-2) Pompa bedeli analizden düşülür.",
+
+  "poz_tarifi": {{
+    "tanim": "İmalatın teknik tanımı ve kapsamı. Kullanılacak malzemelerin türü, kalitesi, standartları belirtilir. Örnek: C25/30 kaliteli hazır beton ile trapez kesitli sulama kanalı imalatı. Beton TSE EN 206-1 standardına uygun olacaktır. Kanal iç yüzeyleri perdahlı (düzgün) olacaktır.",
+
+    "yapim_sartlari": [
+      "Beton dökümü, santral pompası veya transmikser ile yapılacaktır",
+      "Kalıp yüzeyleri düzgün, temiz ve kalıp yağı sürülmüş olacaktır",
+      "Beton vibratörle sıkıştırılacaktır",
+      "Beton kürleme işlemi en az 7 gün su ile yapılacaktır",
+      "Hava sıcaklığı +5°C altında beton dökülmeyecektir",
+      "Beton numuneleri alınarak 28 günlük basınç dayanımı test edilecektir"
+    ],
+
+    "dahil_isler": [
+      "Hazır beton temini ve nakli",
+      "Kalıp yapımı ve sökümü",
+      "Beton dökümü ve vibrasyon ile sıkıştırma",
+      "Yüzey perdahı (düzgünleştirme)",
+      "Beton kürleme işleri",
+      "İşçilik (betoncu usta ve yardımcı)",
+      "İş güvenliği tedbirleri",
+      "Standart kalıp yağı"
+    ],
+
+    "haric_isler": [
+      "Temel kazısı ve zemin hazırlığı",
+      "Grobeton (taban betonu) dökülmesi",
+      "Donatı (demir) temini ve montajı - yalın beton için",
+      "Su yalıtımı ve izolasyon",
+      "Dolgu ve geri dolgu işleri",
+      "Kalıp iskelesi (3 metreden yüksek imalatlar için)",
+      "Özel kür malzemeleri",
+      "Beton pompası bedeli (ayrıca ödenir)"
+    ],
+
+    "olcu_kurallari": {{
+      "birim": "İmalatın ölçü birimi (m, m², m³, adet, ton, kg)",
+      "hesaplama_yontemi": "Proje ölçüleri üzerinden net hacim/alan hesaplanır. Fire miktarları birim fiyata dahildir.",
+      "toleranslar": "±%2 ölçü toleransı kabul edilir",
+      "ozel_durumlar": [
+        "Kanal imalatlarında metraj, kanal ekseni boyunca ölçülür",
+        "Beton hacimleri, projedeki geometrik boyutlar üzerinden hesaplanır",
+        "Kalıp alanı, beton temas yüzeyi üzerinden ölçülür",
+        "0.10 m³ altındaki imalatlar 0.10 m³ kabul edilir"
+      ]
+    }}
+  }},
+
   "components": [
     {{
       "type": "Malzeme",
@@ -614,104 +766,241 @@ Not:
 4. Quantity değerleri REALİSTİK olmalı, emsal pozlardan uyarla
 5. Her component name NET ve TEKNİK olmalı (ihale dosyasında kullanılacak)
 
+⚠️ POZ TARİFİ KURALLARI:
+6. poz_tarifi.tanim: Teknik ve profesyonel dilde yaz, malzeme standartlarını belirt
+7. poz_tarifi.yapim_sartlari: İmalat yöntemine özel, gerçekçi şartlar yaz (min 4-6 madde)
+8. poz_tarifi.dahil_isler: Birim fiyata dahil TÜM işleri listele (min 5-8 madde)
+9. poz_tarifi.haric_isler: Ayrıca ödenmesi gereken işleri listele (min 4-6 madde)
+10. poz_tarifi.olcu_kurallari: Metraj hesabı için net kurallar yaz
+
 ÖNEMLİ:
 • Her malzeme için ayrı nakliye kalemi ekle
 • Miktarları 4 ondalık basamakla yaz
 • Fiyatları 2 ondalık basamakla yaz
+• poz_tarifi alanını İMALAT TÜRÜNE ÖZEL olarak doldur, genel şablon kullanma!
 • JSON dışında hiçbir şey yazma"""
 
-    def _call_openrouter(self, prompt: str, model: str = None, temperature: float = None) -> Dict[str, Any]:
+    def _submit_api_request(self, messages: list, model: str, temperature: float = 0.5, max_tokens: int = 4000, response_format: dict = None) -> str:
+        """
+        Merkezi API istek yöneticisi.
+        Otomatik retry, hata yönetimi ve loglama içerir.
+        """
+        if not self.openrouter_key:
+            raise APIError("OpenRouter API Key bulunamadı", "OpenRouter", 401)
+
         headers = {
             "Authorization": f"Bearer {self.openrouter_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://approximatecostpro.com",
             "X-Title": "Approximate Cost Pro"
         }
+        
+        # Reasoning modeller tespiti (o1, o3, o4-mini vb.)
+        reasoning_models = ["o1", "o3", "o4-mini", "o4-mini-high", "o4-mini-deep"]
+        is_reasoning_model = any(rm in model.lower() for rm in reasoning_models)
+
         data = {
             "model": model or self.get_model("analyze"),
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "Sen Türkiye'de çalışan Yaklaşık Maliyet ve İhale Uzmanı bir İnşaat Mühendisisin. 4734 sayılı Kamu İhale Kanunu, ÇŞB/DSİ/Karayolları birim fiyat analizleri ve resmî işçilik normlarına hâkimsin. İhale dosyaları hazırlama konusunda 20+ yıl deneyime sahipsin. Poz analizleri oluştururken:\n\n• Malzeme miktarlarını ÇŞB resmî analizlerinden alırsın\n• Fire oranlarını KİK kabul gören değerlerde uygularsın (Demir %3-5, Beton %1-2, Kalıp %5-10)\n• İşçilik sürelerini adam/saat formatında ve resmî normlara uygun yazarsın\n• Makine kapasitelerini ve sürelerini gerçekçi hesaplarsın\n• Emsal poz referanslarını mutlaka kullanırsın\n• Nakliye mesafesini 20 km kabul edersin\n• Genel gider + kâr (%25) birim fiyatlara yedirilmiştir, ayrı satır yazmassın\n\nSadece JSON formatında, aşırı düşük sorgulamasında geçebilecek kalitede, gerçekçi ve piyasa rayiçlerine uygun analiz yanıtları verirsin."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-            "temperature": temperature if temperature is not None else 0.1,
-            "max_tokens": 4000
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "plugins": []  # Web search ve diğer plugin'leri devre dışı bırak
         }
 
-        try:
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=120
-            )
-        except requests.exceptions.Timeout:
-            raise APIError("İstek zaman aşımına uğradı (120s)", "OpenRouter", retryable=True)
-        except requests.exceptions.ConnectionError:
-            raise APIError("Bağlantı hatası", "OpenRouter", retryable=True)
+        if is_reasoning_model:
+            logger.info(f"[AI_SERVICE] Reasoning model tespit edildi ({model}).")
 
-        # Handle HTTP errors
-        if response.status_code == 429:
-            raise APIError("Rate limit aşıldı", "OpenRouter", 429, retryable=True)
-        elif response.status_code == 401:
-            raise APIError("API anahtarı geçersiz", "OpenRouter", 401, retryable=False)
-        elif response.status_code == 503:
-            raise APIError("Servis geçici olarak kullanılamıyor", "OpenRouter", 503, retryable=True)
-        elif response.status_code >= 500:
-            raise APIError(f"Sunucu hatası ({response.status_code})", "OpenRouter", response.status_code, retryable=True)
-        elif response.status_code >= 400:
-            error_detail = response.text
+        if response_format:
+            if is_reasoning_model:
+                logger.info(f"[AI_SERVICE] Reasoning model ({model}) için response_format kullanılmayacak.")
+            else:
+                # response_format sadece desteklenen modeller için ekle
+                json_compatible_models = [
+                    "openai", "anthropic", "google", "mistralai",
+                    "meta-llama", "qwen", "deepseek", "gpt", "claude", "gemini"
+                ]
+
+                if any(m in model.lower() for m in json_compatible_models):
+                    data["response_format"] = response_format
+                else:
+                    logger.warning(f"[AI_SERVICE] Model '{model}' json_object formatını desteklemiyor olabilir, response_format eklenmedi.")
+
+        last_exception = None
+
+        for attempt in range(3):
             try:
-                error_detail = response.json()
-            except:
-                pass
-            raise APIError(f"İstek hatası ({response.status_code}): {error_detail}", "OpenRouter", response.status_code, retryable=False)
+                logger.debug(f"API Request ({attempt+1}/3): {model}")
+                response = requests.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=data,
+                    timeout=120
+                )
+                
+                # Özel hata durumları
+                if response.status_code == 429:
+                    raise APIError("Rate limit aşıldı", "OpenRouter", 429, retryable=True)
+                elif response.status_code == 401:
+                    raise APIError("API anahtarı geçersiz", "OpenRouter", 401, retryable=False)
+                elif response.status_code >= 500:
+                    raise APIError(f"Sunucu hatası ({response.status_code})", "OpenRouter", response.status_code, retryable=True)
+                elif response.status_code == 400:
+                    err_msg = response.text
+                    logger.error(f"[AI_SERVICE] 400 Bad Request Payload: {json.dumps(data, ensure_ascii=False)[:1000]}")
+                    logger.error(f"[AI_SERVICE] 400 Bad Request Response: {err_msg}")
+                    
+                    # ÖZEL DURUM: Web Search ve JSON Mode çakışması
+                    if "Web Search cannot be used with JSON mode" in err_msg and "response_format" in data:
+                        logger.warning("[AI_SERVICE] JSON Mode + Web Search çakışması tespit edildi. JSON Mode kapatılarak tekrar deneniyor...")
+                        del data["response_format"]
+                        continue # Döngünün başına dön ve tekrar dene (response_format olmadan)
+                    
+                    # Diğer 400 hataları retry edilemez
+                    raise APIError(f"İstek hatası (400): {err_msg}", "OpenRouter", 400, retryable=False)
+                
+                response.raise_for_status()
+                resp_json = response.json()
 
-        response.raise_for_status()
-        resp_json = response.json()
-        logger.debug(f"OpenRouter Response: {json.dumps(resp_json)[:1000]}...") # Log first 1000 chars
-        content = resp_json['choices'][0]['message']['content']
-        return self._process_response(content)
+                # Debug: API yanıtını logla
+                logger.debug(f"[AI_SERVICE] API Response (truncated): {json.dumps(resp_json, ensure_ascii=False)[:2000]}")
+
+                if 'choices' not in resp_json or not resp_json['choices']:
+                    logger.error(f"[AI_SERVICE] API boş choices döndürdü. Full response: {resp_json}")
+                    raise APIError("API boş yanıt döndürdü", "OpenRouter", 500, retryable=True)
+                    
+                message_data = resp_json['choices'][0].get('message', {})
+                content = message_data.get('content')
+                
+                # FALLBACK: Çıktı 'reasoning' alanındaysa oradan al (o4-mini vb. için)
+                if not content and message_data.get('reasoning'):
+                    logger.info("[AI_SERVICE] Content boş, reasoning kullanılıyor.")
+                    content = message_data.get('reasoning')
+
+                logger.debug(f"[AI_SERVICE] Message data keys: {list(message_data.keys())}")
+                logger.debug(f"[AI_SERVICE] Content type: {type(content)}, length: {len(content) if content else 0}")
+
+                if not content or not content.strip():
+                    logger.error(f"[AI_SERVICE] API boş içerik döndürdü. Message data: {message_data}")
+                    raise APIError("API boş içerik döndürdü", "OpenRouter", 500, retryable=True)
+
+                logger.debug(f"[AI_SERVICE] API Response Length: {len(content)}")
+                return content.strip()
+
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
+                logger.warning(f"Bağlantı hatası (Deneme {attempt+1}): {e}")
+                last_exception = APIError(f"Bağlantı sorunu: {str(e)}", "OpenRouter", retryable=True)
+            except requests.exceptions.RequestException as e:
+                 # Diğer request hatalarını da yakala (fakat logla)
+                logger.warning(f"İstek hatası (Deneme {attempt+1}): {e}")
+                last_exception = APIError(f"İstek hatası: {str(e)}", "OpenRouter", retryable=True)
+            except APIError as e:
+                logger.warning(f"API Hatası (Deneme {attempt+1}): {e}")
+                last_exception = e
+                if not e.retryable:
+                    raise e
+            except Exception as e:
+                logger.error(f"Beklenmeyen Hata (Deneme {attempt+1}): {e}")
+                last_exception = e
+                # Beklenmeyen hatalarda döngüyü kır (retry yapma)
+                break
+            
+            # Retry beklemesi (exponential backoff benzeri)
+            if attempt < 2:
+                time.sleep((attempt + 1) * 2)
+
+        raise last_exception or Exception("Bilinmeyen API hatası")
 
 
+
+    def _extract_outermost_json(self, text: str) -> Optional[str]:
+        """Extract the outermost complete JSON object from text using bracket matching"""
+        stack = []
+        start_idx = -1
+        in_string = False
+        escape_next = False
+
+        for i, char in enumerate(text):
+            if escape_next:
+                escape_next = False
+                continue
+
+            if char == '\\' and in_string:
+                escape_next = True
+                continue
+
+            if char == '"':
+                in_string = not in_string
+                continue
+
+            # Skip processing if inside a string
+            if in_string:
+                continue
+
+            if char == '{':
+                if not stack:
+                    start_idx = i
+                stack.append(char)
+            elif char == '}':
+                if stack:
+                    stack.pop()
+                    if not stack and start_idx != -1:
+                        return text[start_idx:i+1]
+
+        return None
 
     def _process_response(self, content: str) -> Dict[str, Any]:
-        """JSON temizleme ve onarma"""
-        # Markdown bloklarını temizle
-        content = re.sub(r'```json\s*|\s*```', '', content).strip()
+        """JSON temizleme ve onarma - geliştirilmiş versiyon"""
+        if not content:
+            logger.error("[AI_SERVICE] AI boş yanıt döndürdü - Content None/Empty")
+            raise Exception("AI boş yanıt döndürdü.")
 
-        # Önce doğrudan parse etmeyi dene
+        # Debug: Ham içeriği logla (ilk 1000 karakter)
+        logger.debug(f"[AI_SERVICE] Raw AI Response (first 1000 chars):\n{content[:1000]}")
+
+        # 1. Temizleme: Markdown bloklarını kaldır
+        cleaned_content = re.sub(r'```(?:json)?\s*([\s\S]*?)\s*```', r'\1', content).strip()
+
+        # 2. Deneme: Doğrudan Parse
         try:
-            return self._finalize_data(json.loads(content, strict=False))
-        except json.JSONDecodeError:
+            result = json.loads(cleaned_content, strict=False)
+            logger.debug("[AI_SERVICE] Direct JSON parse succeeded")
+            return self._finalize_data(result)
+        except json.JSONDecodeError as e:
+            logger.debug(f"[AI_SERVICE] Direct parse failed: {e}")
+
+        # 3. Deneme: Bracket matching ile JSON bul
+        try:
+            json_candidate = self._extract_outermost_json(cleaned_content)
+            if json_candidate:
+                logger.debug(f"[AI_SERVICE] Bracket matching found JSON: {len(json_candidate)} chars")
+                json_candidate = self._clean_control_characters(json_candidate)
+                result = json.loads(json_candidate, strict=False)
+                return self._finalize_data(result)
+        except Exception as e:
+            logger.debug(f"[AI_SERVICE] Bracket matching failed: {e}")
+
+        # 4. Deneme: Regex ile JSON nesnesini bul (fallback)
+        try:
+            match = re.search(r'(\{[\s\S]*\})', cleaned_content)
+            if match:
+                json_candidate = match.group(1)
+                json_candidate = self._clean_control_characters(json_candidate)
+                return self._finalize_data(json.loads(json_candidate, strict=False))
+        except (json.JSONDecodeError, AttributeError):
             pass
 
-        # JSON'ı metin içinden ayıkla (en dıştaki { })
-        match = re.search(r'(\{[\s\S]*\})', content)
-        if match:
-            json_str = match.group(1)
-
-            # Geçersiz kontrol karakterlerini temizle
-            json_str = self._clean_control_characters(json_str)
-
-            try:
-                return self._finalize_data(json.loads(json_str, strict=False))
-            except Exception as e:
-                # JSON onarma dene
-                repaired = self._repair_json(json_str)
-                try:
-                    return self._finalize_data(json.loads(repaired, strict=False))
-                except Exception as json_err:
-                    logger.error(f"JSON Decode Error. Raw content:\n{content}")
-                    raise Exception(f"AI yanıtı geçerli JSON'a dönüştürülemedi: {str(json_err)} | RAW: {content[:500]}...")
-
-        logger.error(f"No JSON found in response. Raw content:\n{content}")
-        raise Exception(f"AI yanıtında JSON bulunamadı: {content[:500]}...")
+        # 4. Deneme: Onarma (Repair)
+        try:
+            # Regex ile bulunan aday bozuk çıktıysa veya regex bulamadıysa, cleaned_content üzerinde onarım dene
+            json_candidate = match.group(1) if match else cleaned_content
+            repaired = self._repair_json(json_candidate)
+            return self._finalize_data(json.loads(repaired, strict=False))
+        except Exception as e:
+            # Son çare başarısız
+            logger.error(f"JSON Decode Error. Raw content start:\n{content[:500]}...")
+            # Hatanın detayını ve içeriğin bir kısmını kullanıcıya göster
+            error_preview = content[:200] + "..." if len(content) > 200 else content
+            raise Exception(f"AI yanıtı yapısal olarak bozuk: {str(e)} | İçerik: {error_preview}")
 
     def _clean_control_characters(self, json_str: str) -> str:
         """JSON string içindeki geçersiz kontrol karakterlerini temizle"""
@@ -728,13 +1017,21 @@ Not:
         return cleaned
 
     def _repair_json(self, json_str: str) -> str:
-        """Bozuk JSON'ı onarmaya çalış"""
+        """Bozuk JSON'ı onarmaya çalış - geliştirilmiş versiyon"""
         # Trailing comma'ları kaldır
         json_str = re.sub(r',(\s*[}\]])', r'\1', json_str)
 
-        # Eksik tırnakları tamamla
-        json_str = re.sub(r':\s*([^"\[\]{},\s][^,}\]]*[^"\[\]{},\s])\s*([,}\]])',
-                         r': "\1"\2', json_str)
+        # Eksik tırnakları tamamla (property names)
+        json_str = re.sub(r'([{,]\s*)([a-zA-Z_][a-zA-Z0-9_]*)(\s*:)', r'\1"\2"\3', json_str)
+
+        # Unquoted string values için tırnak ekle
+        json_str = re.sub(r':\s*([a-zA-Z_][a-zA-Z0-9_]*)(\s*[},])', r': "\1"\2', json_str)
+
+        # Single quotes → double quotes
+        json_str = json_str.replace("'", '"')
+
+        # Newlines inside JSON strings (escape them)
+        json_str = re.sub(r'\n(?=[^"]*"[^"]*(?:,[^"]*"[^"]*)*\s*[}\]])', r'\\n', json_str)
 
         return json_str
 
@@ -772,5 +1069,33 @@ Not:
 
             # Tutarı hesapla
             comp["total_price"] = round(comp["quantity"] * comp["unit_price"], 2)
+
+        # Poz tarifi alanını kontrol et ve varsayılan değerler ata
+        if "poz_tarifi" not in data:
+            data["poz_tarifi"] = {
+                "tanim": "",
+                "yapim_sartlari": [],
+                "dahil_isler": [],
+                "haric_isler": [],
+                "olcu_kurallari": {
+                    "birim": data.get("suggested_unit", ""),
+                    "hesaplama_yontemi": "",
+                    "toleranslar": "",
+                    "ozel_durumlar": []
+                }
+            }
+        else:
+            # Eksik alanları tamamla
+            poz_tarifi = data["poz_tarifi"]
+            poz_tarifi.setdefault("tanim", "")
+            poz_tarifi.setdefault("yapim_sartlari", [])
+            poz_tarifi.setdefault("dahil_isler", [])
+            poz_tarifi.setdefault("haric_isler", [])
+            poz_tarifi.setdefault("olcu_kurallari", {
+                "birim": data.get("suggested_unit", ""),
+                "hesaplama_yontemi": "",
+                "toleranslar": "",
+                "ozel_durumlar": []
+            })
 
         return data

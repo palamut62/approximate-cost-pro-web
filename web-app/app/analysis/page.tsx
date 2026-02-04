@@ -65,7 +65,7 @@ export default function AnalysisPage() {
     const [analysisName, setAnalysisName] = useState("");
     const { addItem } = useCart();
     const { showNotification } = useNotification();
-    const { usageData, refetch: refetchLLMUsage } = useLLMUsage();
+    const { usageData, loading: usageLoading, refetch: refetchLLMUsage } = useLLMUsage();
 
     // Feedback modal states
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
@@ -488,6 +488,41 @@ export default function AnalysisPage() {
 
     return (
         <div className="flex flex-col h-full relative">
+            {/* Usage Stats Card */}
+            <div className="absolute top-4 right-4 z-50 hidden md:block">
+                <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-4 shadow-2xl flex flex-col gap-2 min-w-[200px]">
+                    <div className="flex items-center gap-2 mb-1">
+                        <div className="p-1.5 bg-purple-500/10 rounded-lg">
+                            <Sparkles className="w-3 h-3 text-purple-500" />
+                        </div>
+                        <span className="text-[10px] font-bold text-[#fafafa] uppercase tracking-widest">AI Limitleri</span>
+                    </div>
+                    {usageLoading ? (
+                        <div className="space-y-2 py-1">
+                            <div className="h-3 w-full bg-[#27272a] animate-pulse rounded"></div>
+                            <div className="h-3 w-3/4 bg-[#27272a] animate-pulse rounded"></div>
+                        </div>
+                    ) : (
+                        <div className="space-y-1">
+                            <div className="flex justify-between items-end">
+                                <span className="text-xs text-[#a1a1aa]">Kalan</span>
+                                <span className={cn("text-sm font-bold font-mono", (usageData.remaining ?? 0) < 5 ? "text-red-500" : "text-green-500")}>
+                                    ${(usageData.remaining ?? 0).toFixed(2)}
+                                </span>
+                            </div>
+                            <div className="flex justify-between items-end">
+                                <span className="text-xs text-[#a1a1aa]">Harcanan</span>
+                                <span className="text-sm font-bold text-[#fafafa] font-mono">${(usageData.total_usage ?? 0).toFixed(2)}</span>
+                            </div>
+                            <div className="w-full h-px bg-[#27272a] my-1" />
+                            <div className="flex justify-between items-end">
+                                <span className="text-xs text-[#a1a1aa]">Limit</span>
+                                <span className="text-sm font-bold text-[#71717a] font-mono">${(usageData.total_credits ?? 0).toFixed(2)}</span>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </div>
             {!result ? (
                 // Initial State - Centered Search (Refined Bolt Aesthetic)
                 <div className="flex-1 flex flex-col items-center justify-start pt-20 px-4 max-w-4xl mx-auto w-full">
@@ -817,7 +852,16 @@ export default function AnalysisPage() {
                                                 {issue.suggestion && (
                                                     <div className="pt-2 flex items-center gap-2 text-[11px] text-[#71717a] italic">
                                                         <Sparkles className="w-3 h-3 text-blue-500 shrink-0" />
-                                                        💡 {issue.suggestion}
+                                                        <span className="flex-1">💡 {issue.suggestion}</span>
+                                                        {["Eksik Kalem", "Eksik Malzeme", "Öğrenilmiş Kural"].includes(issue.category) && (
+                                                            <button
+                                                                onClick={() => handleLearnRule(issue)}
+                                                                className="not-italic bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded-lg px-2.5 py-1 text-[10px] whitespace-nowrap transition-colors shrink-0"
+                                                                title="Bu düzeltmeyi kural olarak kaydet"
+                                                            >
+                                                                + Kural Yap
+                                                            </button>
+                                                        )}
                                                     </div>
                                                 )}
                                             </div>
@@ -1110,7 +1154,7 @@ export default function AnalysisPage() {
                                                                         <div className="text-[10px] bg-white/5 p-1.5 rounded border border-white/5 opacity-70 flex-1">
                                                                             💡 {issue.suggestion}
                                                                         </div>
-                                                                        {issue.category === "Eksik Kalem" && (
+                                                                        {["Eksik Kalem", "Eksik Malzeme", "Öğrenilmiş Kural"].includes(issue.category) && (
                                                                             <button
                                                                                 onClick={() => handleLearnRule(issue)}
                                                                                 className="bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded p-1.5 text-[10px] whitespace-nowrap transition-colors"

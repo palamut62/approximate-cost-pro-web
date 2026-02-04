@@ -64,7 +64,11 @@ async def get_llm_usage():
             # Get credits info (total_credits, total_usage)
             credits_response = await client.get(
                 "https://openrouter.ai/api/v1/credits",
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "HTTP-Referer": "https://approximatecostpro.com",
+                    "X-Title": "Approximate Cost Pro"
+                },
                 timeout=10.0
             )
             credits_response.raise_for_status()
@@ -75,7 +79,11 @@ async def get_llm_usage():
             # Get detailed usage info (monthly, daily, weekly)
             key_response = await client.get(
                 "https://openrouter.ai/api/v1/key",
-                headers={"Authorization": f"Bearer {api_key}"},
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "HTTP-Referer": "https://approximatecostpro.com",
+                    "X-Title": "Approximate Cost Pro"
+                },
                 timeout=10.0
             )
             key_response.raise_for_status()

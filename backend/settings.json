@@ -1,6 +1,6 @@
 {
   "selected_models": {
-    "analyze": "moonshotai/kimi-k2.5",
+    "analyze": "anthropic/claude-sonnet-4",
     "refine": "moonshotai/kimi-k2.5",
     "critic": "moonshotai/kimi-k2.5"
   },

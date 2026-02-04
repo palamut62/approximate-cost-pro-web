@@ -169,9 +169,21 @@ export default function Home() {
             </div>
             <span className="text-[10px] font-bold text-purple-500 uppercase tracking-widest">AI Kullanımı</span>
           </div>
-          <div className="space-y-1">
-            <h3 className="text-3xl font-bold text-[#fafafa] tracking-tight">{usageLoading ? <div className="h-8 w-24 bg-[#27272a] animate-pulse rounded"></div> : `$${stats.totalUsage.toFixed(2)}`}</h3>
-            <p className="text-sm text-[#a1a1aa] font-medium">Toplam API Maliyeti</p>
+          <div className="space-y-3">
+            <div>
+              <h3 className="text-3xl font-bold text-[#fafafa] tracking-tight">{usageLoading ? <div className="h-8 w-24 bg-[#27272a] animate-pulse rounded"></div> : `$${(usageData.remaining ?? 0).toFixed(2)}`}</h3>
+              <p className="text-sm text-[#a1a1aa] font-medium">Kalan Bakiye</p>
+            </div>
+            <div className="flex items-center justify-between text-xs pt-2 border-t border-[#27272a]">
+              <div className="text-[#71717a]">
+                <span className="block text-[10px] uppercase font-bold">Harcanan</span>
+                <span className="text-[#a1a1aa] font-medium">{usageLoading ? "..." : `$${(usageData.total_usage ?? 0).toFixed(2)}`}</span>
+              </div>
+              <div className="text-[#71717a] text-right">
+                <span className="block text-[10px] uppercase font-bold">Limit</span>
+                <span className="text-[#a1a1aa] font-medium">{usageLoading ? "..." : `$${(usageData.total_credits ?? 0).toFixed(2)}`}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>

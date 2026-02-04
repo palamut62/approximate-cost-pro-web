@@ -1,14 +1,26 @@
 import asyncio
 import logging
 import json
-from typing import List
+import time
+from typing import List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 router = APIRouter(prefix="/ws", tags=["Logs"])
 
+# Global reference to the main event loop
+MAIN_LOOP: Optional[asyncio.AbstractEventLoop] = None
+
+def set_main_loop(loop: asyncio.AbstractEventLoop):
+    global MAIN_LOOP
+    MAIN_LOOP = loop
+
 class WebSocketManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
+        self._pending_broadcast: Optional[asyncio.Task] = None
+        self._broadcast_buffer: List[str] = []
+        self._last_emit_time: float = 0
+        self._emit_lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -19,26 +31,57 @@ class WebSocketManager:
             self.active_connections.remove(websocket)
 
     async def broadcast(self, message: str):
-        # Using a list to avoid issues with modification during iteration
+        """Broadcast a message to all connected clients with error handling"""
+        if not self.active_connections:
+            return
+
+        # Use list copy to avoid modification during iteration issues
+        disconnected = []
         for connection in list(self.active_connections):
             try:
-                await connection.send_text(message)
+                if connection.client_state.name != "DISCONNECTED":
+                    await connection.send_text(message)
             except Exception:
-                # Connection might be dead, disconnect it
-                self.disconnect(connection)
+                disconnected.append(connection)
+
+        # Clean up disconnected clients
+        for conn in disconnected:
+            self.disconnect(conn)
+
+    async def _flush_broadcast_buffer(self):
+        """Flush buffered log messages in batch"""
+        async with self._emit_lock:
+            if not self._broadcast_buffer:
+                return
+
+            messages = self._broadcast_buffer.copy()
+            self._broadcast_buffer.clear()
+
+            # Send all messages as a single batch (newline separated)
+            try:
+                batch_message = "\n".join(messages)
+                await self.broadcast(batch_message)
+            except Exception as e:
+                logging.getLogger().error(f"[WS_MANAGER] Broadcast error: {e}")
 
 manager = WebSocketManager()
 
 class WebSocketLogHandler(logging.Handler):
     """
-    Custom logging handler that broadcasts log records to all connected WebSocket clients.
+    Custom logging handler with rate limiting to prevent WebSocket spam.
+    Buffers log messages and broadcasts them in batches.
     """
     def __init__(self, manager: WebSocketManager):
         super().__init__()
         self.manager = manager
+        self._min_emit_interval = 0.1  # 100ms minimum between broadcasts
 
     def emit(self, record: logging.LogRecord):
         try:
+            # Rate limiting: skip if too frequent
+            now = time.time()
+            time_since_last = now - self.manager._last_emit_time
+
             log_entry = self.format(record)
             payload = json.dumps({
                 "timestamp": record.created,
@@ -46,18 +89,31 @@ class WebSocketLogHandler(logging.Handler):
                 "name": record.name,
                 "message": log_entry
             })
-            
-            # Since emit is called from potentially anywhere (not always async),
-            # we use the current running loop to schedule the broadcast.
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self.manager.broadcast(payload))
-            except RuntimeError:
-                # No running event loop in this thread, try to find the main loop if possible
-                # or skip it if we are in a non-async thread that shouldn't block
-                pass
+
+            # Buffer the message
+            self.manager._broadcast_buffer.append(payload)
+
+            # Schedule broadcast if enough time passed
+            if time_since_last >= self._min_emit_interval:
+                self.manager._last_emit_time = now
+                self._schedule_broadcast()
+
         except Exception:
             self.handleError(record)
+
+    def _schedule_broadcast(self):
+        """Schedule broadcast on the main event loop"""
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                loop.create_task(self.manager._flush_broadcast_buffer())
+        except RuntimeError:
+            # No running event loop, use stored main loop
+            if MAIN_LOOP and not MAIN_LOOP.is_closed():
+                asyncio.run_coroutine_threadsafe(
+                    self.manager._flush_broadcast_buffer(),
+                    MAIN_LOOP
+                )
 
 @router.websocket("/logs")
 async def websocket_endpoint(websocket: WebSocket):

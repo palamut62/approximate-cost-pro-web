@@ -1000,9 +1000,9 @@ class DatabaseManager:
 
                 scored_feedback.append((score, fb))
 
-        # En yüksek puanlıları döndür
+        # En yüksek puanlıları döndür (keyword fallback — Vector DB primary)
         scored_feedback.sort(key=lambda x: x[0], reverse=True)
-        return [fb for score, fb in scored_feedback[:limit] if score > 0.2]
+        return [fb for score, fb in scored_feedback[:limit] if score > 0.5]
 
     def increment_feedback_use_count(self, feedback_id: int):
         """Feedback kullanım sayısını artır"""
@@ -1035,5 +1035,88 @@ class DatabaseManager:
         conn = self.get_connection()
         cursor = conn.cursor()
         cursor.execute('UPDATE ai_feedback SET is_active = ? WHERE id = ?', (1 if is_active else 0, feedback_id))
+        conn.commit()
+        conn.close()
+
+    # --- User Rules (Öğrenilen Kategori Kuralları) ---
+
+    def save_user_rule(self, trigger_keywords: list, required_items: list, condition_text: str) -> int:
+        """Otomatik çıkarılan kuralı kaydet. Aynı trigger varsa tekrar ekleme."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+
+        # Duplicate kontrolü: aynı trigger_keywords + required_items kombinasyonu var mı?
+        trigger_json = json.dumps(sorted(trigger_keywords), ensure_ascii=False)
+        cursor.execute(
+            'SELECT id FROM user_rules WHERE trigger_keywords = ? AND is_active = 1',
+            (trigger_json,)
+        )
+        existing = cursor.fetchone()
+        if existing:
+            conn.close()
+            return existing[0]
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        cursor.execute('''
+            INSERT INTO user_rules (trigger_keywords, required_items, condition_text, created_date)
+            VALUES (?, ?, ?, ?)
+        ''', (
+            trigger_json,
+            json.dumps(required_items, ensure_ascii=False),
+            condition_text,
+            now
+        ))
+        rule_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return rule_id
+
+    def get_matching_rules(self, description: str) -> list:
+        """Verilen açıklamayla eşleşen aktif kuralları getir."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM user_rules WHERE is_active = 1')
+        columns = [desc[0] for desc in cursor.description]
+        all_rules = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+
+        desc_lower = description.lower()
+        matched = []
+        for rule in all_rules:
+            try:
+                triggers = json.loads(rule.get('trigger_keywords', '[]'))
+            except:
+                continue
+            # Tüm trigger kelimeleri açıklamada varsa eşleşme
+            if all(kw.lower() in desc_lower for kw in triggers):
+                try:
+                    rule['required_items'] = json.loads(rule.get('required_items', '[]'))
+                except:
+                    rule['required_items'] = []
+                matched.append(rule)
+
+        return matched
+
+    def get_all_rules(self) -> list:
+        """Tüm kuralları listele."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM user_rules ORDER BY created_date DESC')
+        columns = [desc[0] for desc in cursor.description]
+        rules = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        conn.close()
+        for rule in rules:
+            try:
+                rule['trigger_keywords'] = json.loads(rule.get('trigger_keywords', '[]'))
+                rule['required_items'] = json.loads(rule.get('required_items', '[]'))
+            except:
+                pass
+        return rules
+
+    def delete_rule(self, rule_id: int):
+        """Kuralı sil."""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM user_rules WHERE id = ?', (rule_id,))
         conn.commit()
         conn.close()

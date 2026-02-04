@@ -179,19 +179,10 @@ def perform_analysis_sync(
             for item in training_output.get('iscilik', []):
                 kod = item.get('kod', '')
                 ad = item.get('ad', '')
-                
-                # DEBUG: ad değerini kontrol et
-                print(f"[DEBUG] İşçilik item: kod='{kod}', ad='{ad}', ad_type={type(ad)}, ad_len={len(ad) if ad else 0}")
-                
+
                 # Eğer ad boşsa kod üzerinden POZ_DATA'dan al
-                is_ad_empty = not ad or len(ad.strip()) == 0
-                kod_exists = kod and kod in poz_data
-                
-                print(f"[DEBUG] Checks: is_ad_empty={is_ad_empty}, kod_exists={kod_exists}")
-                
-                if is_ad_empty and kod_exists:
+                if (not ad or len(str(ad).strip()) == 0) and kod and kod in poz_data:
                     ad = poz_data[kod].get('description', '')
-                    print(f"[TRAINING NAME FIX] İşçilik '{kod}' → '{ad}'")
                 
                 components.append({
                     'type': 'İşçilik',
@@ -837,8 +828,8 @@ SEMANTIC_TAGS = {
     # BETON TİPLERİ (EN YÜKSEK ÖNCELİK!)
     'hazir_beton': [
         'santral', 'santrali', 'santraldan', 'santralle', 'hazır beton',
-        'dökme', 'pompa', 'pompala', 'mikserde', 'mikserli', 'beton döküm',
-        'beton dökülmesi', 'dökülen', 'betonu', 'hazır', 'betonarme beton'
+        'pompa ile', 'pompala', 'mikserde', 'mikserli', 'transmikser',
+        'beton döküm', 'beton dökülmesi',
     ],
     'beton_harci': [
         'harcı', 'karım', 'karışım', 'karıştır', 'elle', 'şantiye',
@@ -911,6 +902,10 @@ def extract_semantic_tags(text: str) -> List[str]:
             if keyword in text_lower:
                 found_tags.append(tag)
                 break  # Aynı tag'i birden fazla ekleme
+
+    # Default rule: "beton" var ama hazir_beton tetiklenmemişse → şantiye betonu varsayıl
+    if 'beton' in text_lower and 'hazir_beton' not in found_tags and 'beton_harci' not in found_tags:
+        found_tags.append('beton_harci')
 
     return found_tags
 
@@ -990,14 +985,10 @@ def build_context_from_poz_data(description: str, unit: str, max_results: int = 
     vector_service = VectorDBService()
 
     # Lazy ingestion: İlk kullanımda arka planda veri yükle
-    if not vector_service.is_ready() and not vector_service._ingestion_started:
-        import sys
-        if 'backend.main' in sys.modules:
-            main_module = sys.modules['backend.main']
-            if hasattr(main_module, 'app'):
-                app_state = getattr(main_module.app, 'state', None)
-                if app_state and hasattr(app_state, 'poz_data_for_vector'):
-                    vector_service.lazy_ingest(app_state.poz_data_for_vector)
+    # Lazy ingestion OTOMATİK KAPATILDI (Kullanıcı isteği ile)
+    # Artık veri yükleme işlemi sadece 'Ayarlar > Veri Yönetimi > Senkronize Et' ile manuel yapılıyor.
+    if not vector_service.is_ready:
+        logger.warning("[AI_ROUTER] Vector DB hazır değil. Lütfen 'Veri Yönetimi' sekmesinden veriyi senkronize edin.")
 
     # 1. Aday Havuzu Oluştur (Vector Search)
     candidates = []
@@ -1163,56 +1154,125 @@ def build_context_from_poz_data(description: str, unit: str, max_results: int = 
 # FEEDBACK CONTEXT (Kullanıcı Düzeltmelerinden Öğrenme)
 # ============================================
 
-def build_feedback_context(description: str, unit: str) -> str:
-    """
-    Benzer sorgular için geçmiş kullanıcı düzeltmelerini context olarak hazırla.
-    Bu sayede AI, daha önce yapılan hatalardan öğrenir.
-    """
-    feedback_list = db.get_relevant_feedback(description, unit, limit=3)
+def _fetch_feedback_via_vector(description: str) -> list:
+    """Vector DB'den semantik olarak benzer feedback'leri çek, sonra SQLite'tan detay al."""
+    try:
+        from services.vector_db_service import VectorDBService
+        vector_service = VectorDBService()
+        vector_hits = vector_service.search_feedback(description, n_results=3)
+        if not vector_hits:
+            return []
 
-    if not feedback_list:
+        # Vector sonuçlarında 'id' var → SQLite'tan tam kayıt çek
+        feedback_ids = []
+        for hit in vector_hits:
+            fid = hit.get('id')
+            if fid:
+                feedback_ids.append(fid)
+
+        if not feedback_ids:
+            return []
+
+        # SQLite'dan tam kayıtları al
+        all_feedback = db.get_all_feedback()
+        matched = [fb for fb in all_feedback if str(fb.get('id')) in [str(x) for x in feedback_ids] and fb.get('is_active', 1)]
+        return matched
+
+    except Exception as e:
+        logger.warning(f"[FEEDBACK] Vector search hatası: {e}")
+        return []
+
+
+def _build_rules_context(description: str) -> str:
+    """Aktif kategori kurallarını context olarak hazırla."""
+    matched_rules = db.get_matching_rules(description)
+    if not matched_rules:
         return ""
 
-    context_lines = [
+    lines = [
         "\n" + "=" * 60,
-        "⚠️ ÖNCEKİ KULLANICI DÜZELTMELERİ (ÖNEMLİ!):",
+        "📋 AKTİF KATEGORI KURALLAR (Zorunlu Bileşenler):",
         "=" * 60,
-        "Aşağıdaki düzeltmeler benzer sorgular için yapılmıştır.",
-        "Bu bilgileri DİKKATE AL ve aynı hataları TEKRARLAMA!\n"
     ]
+    for rule in matched_rules:
+        required = rule.get('required_items', [])
+        if required:
+            # required_items: [{"name": "...", "type": "..."}, ...] veya ["str", ...] olabilir
+            names = [item["name"] if isinstance(item, dict) else str(item) for item in required]
+            lines.append(f"  ⚠️ {rule.get('condition_text', '')}")
+            lines.append(f"     Zorunlu items: {', '.join(names)}")
+            lines.append(f"     Bu items MUTLAKA analiz sonucunda bulunmalı!")
+    lines.append("=" * 60)
+    return "\n".join(lines)
 
-    for i, fb in enumerate(feedback_list, 1):
-        try:
-            components = fb.get('correct_components', [])
-            if isinstance(components, str):
-                components = json.loads(components)
-        except:
-            components = []
 
-        context_lines.append(f"📝 Düzeltme #{i}:")
-        context_lines.append(f"   Orijinal sorgu: \"{fb.get('original_prompt', '')}\"")
-        context_lines.append(f"   Sorun: {fb.get('correction_description', '')}")
+def build_feedback_context(description: str, unit: str) -> str:
+    """
+    Benzer feedback'leri context olarak hazırla.
+    Arama sırası: Vector DB (semantik) → Keyword fallback → + Kategori Kuralları
+    """
+    # 1. Vector DB'den semantik arama (primary)
+    feedback_list = _fetch_feedback_via_vector(description)
+    source = "vector"
 
-        if components:
-            context_lines.append(f"   Doğru bileşenler:")
-            for comp in components[:5]:  # Max 5 bileşen göster
-                context_lines.append(
-                    f"     • {comp.get('type', '')}: {comp.get('name', '')} "
-                    f"({comp.get('quantity', 0)} {comp.get('unit', '')}) = {comp.get('unit_price', 0)} TL"
-                )
+    # 2. Fallback: keyword-based (eğer vector boş döndüyse)
+    if not feedback_list:
+        feedback_list = db.get_relevant_feedback(description, unit, limit=3)
+        source = "keyword"
 
-        context_lines.append("")
+    # 3. Kategori kuralları context'i (feedback'ten bağımsız)
+    rules_context = _build_rules_context(description)
 
-        # Kullanım sayısını artır
-        if fb.get('id'):
+    if not feedback_list and not rules_context:
+        return ""
+
+    context_lines = []
+
+    # --- Feedback section ---
+    if feedback_list:
+        context_lines.extend([
+            "\n" + "=" * 60,
+            f"⚠️ ÖNCEKİ KULLANICI DÜZELTMELERİ (kaynak: {source}):",
+            "=" * 60,
+            "Aşağıdaki düzeltmeler benzer sorgular için yapılmıştır.",
+            "Bu bilgileri DİKKATE AL ve aynı hataları TEKRARLAMA!\n"
+        ])
+
+        for i, fb in enumerate(feedback_list, 1):
             try:
-                db.increment_feedback_use_count(fb['id'])
+                components = fb.get('correct_components', [])
+                if isinstance(components, str):
+                    components = json.loads(components)
             except:
-                pass
+                components = []
 
-    context_lines.append("=" * 60)
-    context_lines.append("YUKARIDAKİ DÜZELTMELERİ DİKKATE AL!")
-    context_lines.append("=" * 60)
+            context_lines.append(f"📝 Düzeltme #{i}:")
+            context_lines.append(f"   Orijinal sorgu: \"{fb.get('original_prompt', '')}\"")
+            context_lines.append(f"   Sorun: {fb.get('correction_description', '')}")
+
+            if components:
+                context_lines.append(f"   Doğru bileşenler:")
+                for comp in components[:5]:
+                    context_lines.append(
+                        f"     • {comp.get('type', '')}: {comp.get('name', '')} "
+                        f"({comp.get('quantity', 0)} {comp.get('unit', '')}) = {comp.get('unit_price', 0)} TL"
+                    )
+
+            context_lines.append("")
+
+            if fb.get('id'):
+                try:
+                    db.increment_feedback_use_count(fb['id'])
+                except:
+                    pass
+
+        context_lines.append("=" * 60)
+        context_lines.append("YUKARIDAKİ DÜZELTMELERİ DİKKATE AL!")
+        context_lines.append("=" * 60)
+
+    # --- Rules section ---
+    if rules_context:
+        context_lines.append(rules_context)
 
     return "\n".join(context_lines)
 
@@ -1514,17 +1574,22 @@ def match_prices_from_poz_data(result: Dict) -> Dict:
                 db_name = poz_data[code]['description']
                 # Nakliye kalemlerinde açıklama özel olabilir (formül vs.), dokunma
                 if comp.get('type') != 'Nakliye':
-                    # Geliştirilmiş kontrol: Boş, kısa veya genel isimler
-                    name_lower = name.lower() if name else ""
+                    # Kısa ama geçerli malzeme isimleri (whitelist)
+                    SHORT_VALID_NAMES = {
+                        'kum', 'pum', 'tuz', 'su', 'tel', 'çit', 'bant',
+                        'yüz', 'alçı', 'kireç', 'maden', 'kurum',
+                    }
+                    name_lower = name.lower().strip() if name else ""
                     is_invalid_name = (
-                        not name or  # Boş
-                        len(name) < 5 or  # Çok kısa
-                        name == "Açıklama girin" or  # Tam eşleşme
-                        "açıklama" in name_lower or  # İçeriyor
-                        "girin" in name_lower or  # "girin" kelimesi
-                        name_lower.strip() == "" or  # Sadece boşluk
-                        name == "N/A" or  # Placeholder
-                        name == "-"  # Tire
+                        not name or
+                        name_lower == "" or
+                        name == "Açıklama girin" or
+                        "açıklama" in name_lower or
+                        "girin" in name_lower or
+                        name == "N/A" or
+                        name == "-" or
+                        # Kısa isim kontrolü: whitelist'te yoksa ve 4 char'dan kısa → reddedil
+                        (len(name) < 4 and name_lower not in SHORT_VALID_NAMES)
                     )
                     
                     if is_invalid_name:
@@ -1700,17 +1765,25 @@ def validate_beton_composition(components: List[Dict], description: str) -> List
     if has_hazir_beton:
         validation_logger.debug("Hazır beton tespit edildi")
 
-        # Çimento, kum, çakıl varsa KALDIR
         original_count = len(components)
+        # Çimento, kum, çakıl → mükerrer malzeme, kaldır
         components = [
             comp for comp in components
             if not (comp.get('type', '').lower() == 'malzeme' and
                    comp.get('code', '') in ['10.130.1202', '10.130.1004', '10.130.1001'])
         ]
 
+        # Hazır beton nakliyesi → dahil, ayrı satır olarak kalır (transmikser ile gelir)
+        # Sadece "beton nakliyesi" satırını kaldır, diğer nakliyeler (demir, tuğla vb.) kalır
+        components = [
+            comp for comp in components
+            if not (comp.get('type', '').lower() == 'nakliye' and
+                   any(kw in comp.get('name', '').lower() for kw in ['beton nakliye', 'hazır beton nakliye']))
+        ]
+
         if len(components) < original_count:
             removed = original_count - len(components)
-            validation_logger.info(f"{removed} gereksiz malzeme kaldırıldı (çimento/kum/çakıl - hazır beton kullanılıyor)")
+            validation_logger.info(f"{removed} gereksiz kalem kaldırıldı (hazır beton: çimento/kum/çakıl + beton nakliyesi)")
 
     # 2. GROBETON KONTROLÜ
     has_grobeton_keyword = any(kw in desc_lower for kw in ['grobeton', 'düşük kaliteli beton', 'taban betonu'])
@@ -1885,35 +1958,132 @@ def validate_beton_betonarme(components: List[Dict], description: str) -> List[D
     return components
 
 
-def validate_general_construction_rules(components: List[Dict], description: str) -> List[Dict]:
+def apply_waste_rates(components: List[Dict], description: str) -> List[Dict]:
     """
-    Genel inşaat mantığı kurallarını kontrol et ve eksikleri tamamla.
-    
-    Kurallar:
-    - Kazı varsa nakliye de olmalı
-    - Duvar varsa harç olmalı
-    - Seramik/Fayans varsa yapıştırıcı olmalı
+    Demir, beton ve kalıp miktarlarına KİK kabul gören fire oranlarını uygula.
+    AI genelde NET miktar döndürür; fire dahil miktar ihaleye girmeli.
+
+    Oranlar config.py'den alınır:
+      STEEL_WASTE_RATE   = 0.05  (%5)
+      CONCRETE_WASTE_RATE = 0.02 (%2)
+      FORMWORK_WASTE_RATE = 0.10 (%10)
     """
     if not components:
         return components
-    
+
+    from config import get_validation_config
+    cfg = get_validation_config()
+
+    for comp in components:
+        # Zaten fire dahil ise tekrar ekleme
+        name_lower = comp.get('name', '').lower()
+        if 'fire dahil' in name_lower:
+            continue
+
+        qty = comp.get('quantity', 0.0)
+        if qty <= 0:
+            continue
+
+        rate = None
+        label = ""
+
+        # Demir/çelik/donatı
+        if any(kw in name_lower for kw in ['demir', 'çelik', 'donatı', 'nervürlü', 'hasır', 's420', 's500']):
+            rate = cfg.STEEL_WASTE_RATE
+            label = f"%{int(rate*100)} fire dahil"
+        # Beton (hazır beton dahil, ancak malzeme tipinde)
+        elif comp.get('type', '').lower() == 'malzeme' and 'beton' in name_lower:
+            rate = cfg.CONCRETE_WASTE_RATE
+            label = f"%{int(rate*100)} fire dahil"
+        # Kalıp
+        elif 'kalıp' in name_lower and comp.get('type', '').lower() == 'malzeme':
+            rate = cfg.FORMWORK_WASTE_RATE
+            label = f"%{int(rate*100)} fire dahil"
+
+        if rate is not None:
+            new_qty = round(qty * (1 + rate), 4)
+            comp['quantity'] = new_qty
+            comp['total_price'] = round(new_qty * comp.get('unit_price', 0), 2)
+            # İsim güncelle — fire oranını belirt
+            if label and label not in comp.get('name', ''):
+                comp['name'] = comp['name'].rstrip(')') + f' ({label})'
+            validation_logger.info(f"Fire uygulandı: {comp['name']} → {qty:.4f} → {new_qty:.4f} (rate={rate})")
+
+    return components
+
+
+def _estimate_quantity_for_rule_item(comp: Dict, components: List[Dict], description: str) -> float:
+    """
+    Validation tarafından sıfır miktar eklenmiş bir kalem için makul bir
+    default tahmin üret. İnşaat sektörü norm oranları kullanılır.
+    """
+    name_lower = comp.get('name', '').lower()
+
+    # Kazı nakliyesi → kazı miktarını bul
+    if 'kazı' in name_lower and 'nakliye' in name_lower:
+        kazi = next((c for c in components if 'kazı' in c.get('name', '').lower() and c.get('quantity', 0) > 0), None)
+        if kazi:
+            return kazi['quantity']  # kazı m³ = nakliye m³
+
+    # Harç (duvar) → duvar/tuğla miktarına göre 0.03 m³/m²
+    if 'harç' in name_lower:
+        wall = next((c for c in components if any(kw in c.get('name', '').lower() for kw in ['duvar', 'tuğla', 'briket', 'blok']) and c.get('quantity', 0) > 0), None)
+        if wall:
+            return round(wall['quantity'] * 0.03, 4)  # tipik 0.03 m³ harç / m² duvar
+
+    # Yapıştırıcı (seramik) → seramik miktarına göre 5 kg/m²
+    if 'yapıştırıcı' in name_lower:
+        tile = next((c for c in components if any(kw in c.get('name', '').lower() for kw in ['seramik', 'fayans']) and c.get('quantity', 0) > 0), None)
+        if tile:
+            return round(tile['quantity'] * 5.0, 2)  # tipik 5 kg yapıştırıcı / m²
+
+    # Derz (seramik) → seramik miktarına göre 1.5 kg/m²
+    if 'derz' in name_lower:
+        tile = next((c for c in components if any(kw in c.get('name', '').lower() for kw in ['seramik', 'fayans']) and c.get('quantity', 0) > 0), None)
+        if tile:
+            return round(tile['quantity'] * 1.5, 2)  # tipik 1.5 kg derz / m²
+
+    # Demir (betonarme auto-add) → beton miktarına göre 0.1 ton/m³
+    if any(kw in name_lower for kw in ['demir', 'nervürlü', 'donatı']):
+        beton = next((c for c in components if 'beton' in c.get('name', '').lower() and c.get('type', '').lower() == 'malzeme' and c.get('quantity', 0) > 0), None)
+        if beton:
+            unit = comp.get('unit', 'ton').lower()
+            base = beton['quantity'] * 0.10  # 100 kg/m³ tipik
+            return round(base * 1000, 2) if unit == 'kg' else round(base, 4)
+
+    return 0.0  # Tahmin yapılamadı
+
+
+def validate_general_construction_rules(components: List[Dict], description: str) -> List[Dict]:
+    """
+    Genel inşaat mantığı kurallarını kontrol et ve eksikleri tamamla.
+
+    Kurallar:
+    - Kazı varsa nakliye de olmalı
+    - Duvar varsa harç olmalı
+    - Seramik/Fayans varsa yapıştırıcı VE derz olmalı
+    - Sıfır miktarlı auto-added items için default tahmin yapıl
+    """
+    if not components:
+        return components
+
     desc_lower = description.lower()
-    
+
     # Mevcut bileşenleri analiz et
     has_excavation = any('kazı' in comp.get('name', '').lower() for comp in components)
-    has_transport = any('nakliye' in comp.get('name', '').lower() or 'taşıma' in comp.get('name', '').lower() 
+    has_transport = any('nakliye' in comp.get('name', '').lower() or 'taşıma' in comp.get('name', '').lower()
                        for comp in components)
-    
-    has_wall = any('duvar' in comp.get('name', '').lower() or 'tuğla' in comp.get('name', '').lower() 
+
+    has_wall = any('duvar' in comp.get('name', '').lower() or 'tuğla' in comp.get('name', '').lower()
                   for comp in components)
-    has_mortar = any('harç' in comp.get('name', '').lower() or 'çimento' in comp.get('name', '').lower() 
+    has_mortar = any('harç' in comp.get('name', '').lower() or 'çimento' in comp.get('name', '').lower()
                     for comp in components)
-    
-    has_tile = any('seramik' in comp.get('name', '').lower() or 'fayans' in comp.get('name', '').lower() 
+
+    has_tile = any('seramik' in comp.get('name', '').lower() or 'fayans' in comp.get('name', '').lower()
                   for comp in components)
-    has_adhesive = any('yapıştırıcı' in comp.get('name', '').lower() or 'derz' in comp.get('name', '').lower() 
-                      for comp in components)
-    
+    has_adhesive = any('yapıştırıcı' in comp.get('name', '').lower() for comp in components)
+    has_grout = any('derz' in comp.get('name', '').lower() for comp in components)
+
     # Kural 1: Kazı varsa nakliye de olmalı
     if has_excavation and not has_transport and 'nakliye hariç' not in desc_lower:
         components.append({
@@ -1927,7 +2097,7 @@ def validate_general_construction_rules(components: List[Dict], description: str
             'price_source': 'validation_rule',
             'notes': '[OTOMATIK EKLENDI] Kazı yapıldığında toprak nakliyesi gereklidir'
         })
-    
+
     # Kural 2: Duvar varsa harç olmalı
     if has_wall and not has_mortar and 'harç hariç' not in desc_lower:
         components.append({
@@ -1941,7 +2111,7 @@ def validate_general_construction_rules(components: List[Dict], description: str
             'price_source': 'validation_rule',
             'notes': '[OTOMATIK EKLENDI] Duvar örülmesi için harç gereklidir'
         })
-    
+
     # Kural 3: Seramik/Fayans varsa yapıştırıcı olmalı
     if has_tile and not has_adhesive and 'yapıştırıcı hariç' not in desc_lower:
         components.append({
@@ -1955,11 +2125,35 @@ def validate_general_construction_rules(components: List[Dict], description: str
             'price_source': 'validation_rule',
             'notes': '[OTOMATIK EKLENDI] Seramik/Fayans için yapıştırıcı gereklidir'
         })
-    
+
+    # Kural 4: Seramik/Fayans varsa derz malzeme de olmalı
+    if has_tile and not has_grout and 'derz hariç' not in desc_lower:
+        components.append({
+            'type': 'Malzeme',
+            'code': '10.160.1045',
+            'name': 'Seramik derz malzemesi',
+            'unit': 'kg',
+            'quantity': 0.0,
+            'unit_price': 18.0,
+            'total_price': 0.0,
+            'price_source': 'validation_rule',
+            'notes': '[OTOMATIK EKLENDI] Seramik/Fayans için derz malzeme gereklidir'
+        })
+
+    # Sıfır miktarlı validation_rule items için default tahmin
+    for comp in components:
+        if comp.get('price_source') == 'validation_rule' and comp.get('quantity', 0.0) == 0.0:
+            estimated = _estimate_quantity_for_rule_item(comp, components, description)
+            if estimated > 0:
+                comp['quantity'] = estimated
+                comp['total_price'] = round(estimated * comp.get('unit_price', 0), 2)
+                comp['notes'] = comp.get('notes', '') + f' [MİKTAR TAHMIN: {estimated}]'
+                validation_logger.info(f"Miktar tahmini yapıldı: {comp['name']} → {estimated}")
+
     return components
 
 
-def calculate_confidence_score(components: List[Dict], description: str) -> int:
+def calculate_confidence_score(components: List[Dict], description: str) -> Dict[str, Any]:
     """
     Analiz sonucunun güven skorunu hesapla (0-100).
     
@@ -1971,7 +2165,7 @@ def calculate_confidence_score(components: List[Dict], description: str) -> int:
     - Fiyat bulunamadı: 0
     """
     if not components:
-        return 0
+        return {"score": 0, "level": "Low"}
     
     total_score = 0
     component_count = len(components)
@@ -2000,11 +2194,17 @@ def calculate_confidence_score(components: List[Dict], description: str) -> int:
     else:
         avg_score = 0
     
-    # Eksik veriler için ceza
+    # Eksik fiyat için ceza
     missing_prices = sum(1 for c in components if c.get('unit_price', 0) == 0)
     if missing_prices > 0:
         penalty = (missing_prices / component_count) * 20
         avg_score -= penalty
+
+    # Sıfır miktar için ceza (auto-added items tahmini yapılamamış olabilir)
+    zero_qty = sum(1 for c in components if c.get('quantity', 0) == 0)
+    if zero_qty > 0:
+        penalty_qty = (zero_qty / component_count) * 10
+        avg_score -= penalty_qty
     
     # 0-100 aralığına sınırla
     score = max(0, min(100, int(avg_score)))
@@ -2049,17 +2249,20 @@ async def analyze_poz(request: AnalysisRequest):
         if training_service:
             direct_match = training_service.direct_lookup(request.description, threshold=0.95)
             
-            # --- YENİ: Kritik Kelime Kontrolü (Concrete Class Check) ---
+            # --- Kritik Kelime Kontrolü (Concrete Class Check) ---
+            # Desteklenen formatlar: C25/30, C-25, C 25.30, c25, C25
             if direct_match:
                 import re
                 try:
-                    user_concrete = re.search(r'C\s*(\d+/\d+)', request.description, re.IGNORECASE)
-                    matched_concrete = re.search(r'C\s*(\d+/\d+)', direct_match['input'], re.IGNORECASE)
+                    # Birincil beton sınıf sayısını çıkar (C sonrasındaki ilk sayı)
+                    concrete_re = r'C[\s\-]*(\d+)(?:[/.\s]\d+)?'
+                    user_concrete = re.search(concrete_re, request.description, re.IGNORECASE)
+                    matched_concrete = re.search(concrete_re, direct_match['input'], re.IGNORECASE)
 
                     if user_concrete and matched_concrete:
                         if user_concrete.group(1) != matched_concrete.group(1):
-                            print(f"❌ DIRECT LOOKUP REFUSED: Beton sınıfı uyuşmazlığı ({user_concrete.group(1)} != {matched_concrete.group(1)})")
-                            direct_match = None # Eşleşmeyi iptal et
+                            print(f"❌ DIRECT LOOKUP REFUSED: Beton sınıfı uyuşmazlığı (C{user_concrete.group(1)} != C{matched_concrete.group(1)})")
+                            direct_match = None
                 except Exception as e:
                     print(f"Error in concrete check: {e}")
 
@@ -2211,11 +2414,9 @@ async def analyze_poz(request: AnalysisRequest):
             # Çoklu model konsensüs modu
             try:
                 consensus_service = ConsensusAnalysisService(service)
-                result = asyncio.get_event_loop().run_until_complete(
-                    consensus_service.analyze_with_consensus(
+                result = await consensus_service.analyze_with_consensus(
                         request.description, request.unit, full_context
                     )
-                )
                 advanced_metrics["consensus_score"] = result.get("consensus_score", 0)
                 advanced_metrics["model_count"] = result.get("model_count", 0)
                 logger.info(f"Consensus analiz tamamlandı. Skor: {advanced_metrics.get('consensus_score', 0):.2f}")
@@ -2232,11 +2433,9 @@ async def analyze_poz(request: AnalysisRequest):
             # Self-consistency modu
             try:
                 consistency_service = SelfConsistencyService(service, n_samples=3)
-                result = asyncio.get_event_loop().run_until_complete(
-                    consistency_service.analyze_with_consistency(
+                result = await consistency_service.analyze_with_consistency(
                         request.description, request.unit, full_context
                     )
-                )
                 advanced_metrics["consistency_score"] = result.get("consistency_score", 0)
                 advanced_metrics["sample_count"] = result.get("sample_count", 0)
                 if result.get("warning"):
@@ -2304,8 +2503,11 @@ async def analyze_poz(request: AnalysisRequest):
         # STEP 3: EK VALIDASYONLAR VE PUANLAMA (YENİ)
         # ========================================
         
-        # 3.1. Genel İnşaat Kuralları Validasyonu (Kazı->Nakliye, Duvar->Harç vb.)
+        # 3.1. Genel İnşaat Kuralları Validasyonu (Kazı->Nakliye, Duvar->Harç, Seramik->Derz vb.)
         result["components"] = validate_general_construction_rules(result["components"], request.description)
+
+        # 3.1.5. Fire oranları (demir %5, beton %2, kalıp %10) — fiyat eşleştirme sonrası
+        result["components"] = apply_waste_rates(result["components"], request.description)
 
         # 3.2. Güven Skoru Hesaplama
         confidence_data = calculate_confidence_score(result["components"], request.description)

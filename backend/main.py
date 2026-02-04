@@ -2,6 +2,7 @@ import threading
 import logging
 import sys
 import os
+import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -23,7 +24,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from services.data_manager import CSVLoader
 from services.training_data_service import TrainingDataService
-from routers import ai, projects, analyses, feedback, settings, usage, dashboard, logs
+from routers import ai, projects, analyses, feedback, settings, usage, dashboard, logs, files
 from database import DatabaseManager
 
 app = FastAPI(title="Approximate Cost API", version="1.0.0")
@@ -46,11 +47,14 @@ app.include_router(settings.router, prefix="/api")
 app.include_router(usage.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 app.include_router(logs.router, prefix="/api")
+app.include_router(files.router, prefix="/api")
 
 # Global Data Cache
 POZ_DATA = {}
 LOADED_FILES = []
 TRAINING_DATA_SERVICE = None
+DATA_LOADING_LOCK = asyncio.Lock()
+DATA_LOADED = False
 
 @app.get("/api/health")
 async def health_check():
@@ -70,86 +74,141 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup_event():
-    """Start scan on startup"""
-    # Run in a separate thread to not block startup
-    threading.Thread(target=load_initial_data).start()
+    """Start scan on startup - async version with parallel loading"""
+    # Initialize WebSocket Logging Bridge first
+    from routers.logs import get_log_handler, set_main_loop
+
+    # Store the main loop reference for background threads
+    set_main_loop(asyncio.get_running_loop())
     
-    # Initialize WebSocket Logging Bridge
-    from routers.logs import get_log_handler
+    # Store reload function for manual sync from routers
+    app.state.reload_data_func = load_initial_data_async
+
     ws_handler = get_log_handler()
-    
+
     # Configure root logger to include WS handler
     root_logger = logging.getLogger()
-    
+
     # Use the same format as defined in config
     from config import get_log_config
     config = get_log_config()
     formatter = logging.Formatter(fmt=config.LOG_FORMAT, datefmt=config.LOG_DATE_FORMAT)
     ws_handler.setFormatter(formatter)
-    
+
     root_logger.addHandler(ws_handler)
-    print("WebSocket Logging Bridge initialized.")
+    print("[STARTUP] WebSocket Logging Bridge initialized.")
 
-def load_initial_data():
-    global POZ_DATA, LOADED_FILES, TRAINING_DATA_SERVICE
-    print("Loading initial data...")
+    # Load data in background (non-blocking)
+    asyncio.create_task(load_initial_data_async())
 
-    # 1. Load Data from multiple sources
+async def load_initial_data_async():
+    """Async version of data loading with proper error handling"""
+    global POZ_DATA, LOADED_FILES, TRAINING_DATA_SERVICE, DATA_LOADED
+
+    async with DATA_LOADING_LOCK:
+        if DATA_LOADED:
+            return
+
+        print("[STARTUP] Loading initial data...")
+
+        try:
+            # Run blocking CSV loading in thread pool
+            loop = asyncio.get_running_loop()
+            all_data, all_files = await loop.run_in_executor(None, _load_csv_data)
+
+            # Update globals
+            POZ_DATA = all_data
+            LOADED_FILES = all_files
+            app.state.poz_data = all_data
+            app.state.loaded_files = all_files
+
+            print(f"[STARTUP] ✅ Loaded {len(all_data)} items from {len(all_files)} files.")
+
+            # Load training data
+            training_file = Path(__file__).parent.parent / "egitim_verisi_CLEANED.jsonl"
+            TRAINING_DATA_SERVICE = TrainingDataService(str(training_file))
+            app.state.training_data_service = TRAINING_DATA_SERVICE
+
+            training_stats = TRAINING_DATA_SERVICE.get_stats()
+            print(f"[STARTUP] ✅ Loaded {training_stats.get('total_examples', 0)} training examples.")
+
+            # Initialize Vector DB — client hemen bağlanır, model arka planda preload edilir
+            from services.vector_db_service import VectorDBService
+            vector_service = VectorDBService()
+            app.state.vector_db_service = vector_service
+            app.state.poz_data_for_vector = list(all_data.values())
+
+            # Client bağlantısını hemen kur → status endpoint doğru çalışır
+            vector_service._ensure_client_connected()
+            existing_count = vector_service.collection.count() if vector_service.collection else 0
+            print(f"[STARTUP] [VECTOR_DB] Client bağlandı. Disk'teki mevcut kayıt: {existing_count}")
+
+            # Model preload: arka planda yükle, ilk analiz beklemesini ortadan kaldırır
+            def _preload_model():
+                vector_service._ensure_model_loaded()
+                # Eğer disk'te veri yoksa (ilk çalışma), ingestion başlat
+                if vector_service.collection and vector_service.collection.count() == 0:
+                    vector_service.ingest_data(app.state.poz_data_for_vector)
+                    print(f"[STARTUP] [VECTOR_DB] Ingestion tamamlandı. {vector_service.collection.count()} kayıt.")
+                else:
+                    print(f"[STARTUP] [VECTOR_DB] Model preload tamamlandı. Mevcut kayıt: {vector_service.collection.count()}")
+
+            preload_thread = threading.Thread(target=_preload_model, daemon=True)
+            preload_thread.start()
+            print(f"[STARTUP] [VECTOR_DB] Model preload arka planda başlatıldı.")
+
+            DATA_LOADED = True
+
+        except Exception as e:
+            logging.error(f"[STARTUP] Error loading initial data: {e}")
+            # Set empty data to prevent crashes
+            POZ_DATA = {}
+            LOADED_FILES = []
+            app.state.poz_data = {}
+            app.state.loaded_files = []
+            DATA_LOADED = True
+            print("[System] Data reload triggered successfully.")
+
+def _load_csv_data():
+    """Synchronous CSV loading function (runs in thread pool)"""
     all_data = {}
     all_files = []
-    
+
     # Check ANALIZ folder (Detailed Analysis)
     analiz_folder = Path(__file__).parent.parent / "ANALIZ"
     if analiz_folder.exists():
-        print(f"Scanning ANALIZ folder: {analiz_folder}")
+        print(f"[STARTUP] Scanning ANALIZ folder: {analiz_folder}")
         loader = CSVLoader(analiz_folder)
         data, count, files = loader.run()
         all_data.update(data)
         all_files.extend(files)
-        print(f"Loaded {count} items from ANALIZ.")
-        
+        print(f"[STARTUP] Loaded {count} items from ANALIZ.")
+
     # Check PDF folder (Unit Prices)
     pdf_folder = Path(__file__).parent.parent / "PDF"
     if pdf_folder.exists():
-        print(f"Scanning PDF folder: {pdf_folder}")
+        print(f"[STARTUP] Scanning PDF folder: {pdf_folder}")
         loader = CSVLoader(pdf_folder)
         data, count, files = loader.run()
-        
-        # Merge robustly (Don't overwrite existing keys unless new one has more info?)
-        # For now, just setdefault to prefer ANALIZ (first load)
+
+        # Merge robustly
         merged_count = 0
         for k, v in data.items():
             if k not in all_data:
                 all_data[k] = v
                 merged_count += 1
-            # else: keep ANALIZ version as it might be from the detailed analysis file
-                
+
         all_files.extend(files)
-        print(f"Loaded {count} items from PDF ({merged_count} new unique items merged).")
+        print(f"[STARTUP] Loaded {count} items from PDF ({merged_count} new unique items merged).")
 
-    POZ_DATA = all_data
-    LOADED_FILES = all_files
+    return all_data, all_files
 
-    # 2. Load Training Data (JSONL eğitim verisi)
-    training_file = Path(__file__).parent.parent / "egitim_verisi_FINAL_READY.jsonl"
-    TRAINING_DATA_SERVICE = TrainingDataService(str(training_file))
-
-    # 3. Ayrıca app.state'e de kaydet (router erişimi için)
-    app.state.poz_data = all_data
-    app.state.loaded_files = all_files
-    app.state.training_data_service = TRAINING_DATA_SERVICE
-
-    print(f"✅ Loaded {len(all_data)} items from {len(all_files)} files.")
-    training_stats = TRAINING_DATA_SERVICE.get_stats()
-    print(f"✅ Loaded {training_stats.get('total_examples', 0)} training examples.")
-
-    # 4. Vector DB (Lazy Loading Mode)
-    from services.vector_db_service import VectorDBService
-    vector_service = VectorDBService()
-    app.state.vector_db_service = vector_service
-    # İlk AI analizi yapıldığında otomatik olarak ingestion başlayacak
-    app.state.poz_data_for_vector = list(all_data.values())
-    print(f"[VECTOR_DB] Lazy mode aktif. İlk AI analizinde {len(all_data)} poz yüklenecek.")
+def load_initial_data():
+    """Legacy sync loader - kept for compatibility (deprecated)"""
+    global POZ_DATA, LOADED_FILES, TRAINING_DATA_SERVICE
+    print("[LEGACY] WARNING: Using legacy sync loader. This should not be called in normal operation.")
+    # This function is kept only for backward compatibility
+    # The async version should be used instead
 
 @app.get("/")
 def read_root():

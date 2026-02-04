@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { Settings, RefreshCw, Save, Check, AlertTriangle, Shield, Cpu, MessageSquare, Truck, FileSignature, Layers } from 'lucide-react';
 import Link from 'next/link';
 import api from '@/lib/api';
+import FileManager from '@/components/FileManager';
 
 interface Model {
     id: string;
@@ -59,7 +60,7 @@ export default function SettingsPage() {
     const [refreshing, setRefreshing] = useState(false);
     const [saving, setSaving] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
-    const [activeTab, setActiveTab] = useState<'models' | 'general' | 'signatories'>('models');
+    const [activeTab, setActiveTab] = useState<'models' | 'general' | 'signatories' | 'data'>('models');
 
     useEffect(() => {
         fetchSettings();
@@ -202,7 +203,14 @@ export default function SettingsPage() {
                         className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${activeTab === 'signatories' ? 'bg-[#27272a] text-white' : 'text-[#a1a1aa] hover:bg-[#27272a]/50 hover:text-[#fafafa]'}`}
                     >
                         <FileSignature className="w-4 h-4" />
-                        İmza Ayarları
+                        Imza Ayarları
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('data')}
+                        className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${activeTab === 'data' ? 'bg-[#27272a] text-white' : 'text-[#a1a1aa] hover:bg-[#27272a]/50 hover:text-[#fafafa]'}`}
+                    >
+                        <Settings className="w-4 h-4" />
+                        Veri Yönetimi
                     </button>
 
                     <div className="mt-auto pt-6">
@@ -218,7 +226,10 @@ export default function SettingsPage() {
                         <h2 className="text-xl font-bold text-[#fafafa]">
                             {activeTab === 'models' && 'Yapay Zeka Modelleri'}
                             {activeTab === 'general' && 'Genel Hesaplama Kabulleri'}
+                            {activeTab === 'models' && 'Yapay Zeka Modelleri'}
+                            {activeTab === 'general' && 'Genel Hesaplama Kabulleri'}
                             {activeTab === 'signatories' && 'Rapor İmza Ayarları'}
+                            {activeTab === 'data' && 'Veri Yönetimi'}
                         </h2>
                         {/* Save Button (Top Right) */}
                         <button
@@ -272,8 +283,8 @@ export default function SettingsPage() {
                             <div className="space-y-4">
                                 {['analyze', 'refine', 'critic'].map((task) => (
                                     <div key={task} className={`p-4 rounded-lg border flex flex-col md:flex-row md:items-center gap-4 ${task === 'analyze' ? 'bg-blue-500/5 border-blue-500/10' :
-                                            task === 'refine' ? 'bg-green-500/5 border-green-500/10' :
-                                                'bg-red-500/5 border-red-500/10'
+                                        task === 'refine' ? 'bg-green-500/5 border-green-500/10' :
+                                            'bg-red-500/5 border-red-500/10'
                                         }`}>
                                         <div className="min-w-[140px]">
                                             <div className="flex items-center gap-2 font-medium text-[#fafafa] text-sm capitalize">
@@ -378,6 +389,11 @@ export default function SettingsPage() {
                                 </div>
                             </div>
                         </div>
+                    )}
+
+                    {/* --- TAB CONTENT: DATA --- */}
+                    {activeTab === 'data' && (
+                        <FileManager />
                     )}
 
                 </div>

@@ -27,8 +27,8 @@ class VectorDBService:
 
         logger.info("[VECTOR_DB] Servis başlatılıyor (lazy mode)...")
 
-        # CUDA hatasını önlemek için CPU kullanımını zorla
-        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        # CUDA hatasını önlemek için CPU kullanımını zorla satırını kaldırıyoruz
+        # os.environ['CUDA_VISIBLE_DEVICES'] = ''
 
         self.persist_directory = os.path.join(os.path.dirname(os.path.dirname(__file__)), "chroma_db")
         self.model = None
@@ -45,19 +45,15 @@ class VectorDBService:
         self._initialized = True
         logger.info("[VECTOR_DB] Servis hazır (model henüz yüklenmedi).")
 
-    def _ensure_model_loaded(self):
-        """Model'i lazy olarak yükle"""
-        if self._model_loaded:
+    def _ensure_client_connected(self):
+        """ChromaDB client'a bağlan (model olmadan). Status kontrolü için yeterli."""
+        if self.client is not None:
             return True
 
         with self._lock:
-            if self._model_loaded:
+            if self.client is not None:
                 return True
-
-            logger.info("[VECTOR_DB] Embedding modeli yükleniyor (CPU modunda)...")
             try:
-                # Türkçe destekli model
-                self.model = SentenceTransformer('emrecan/bert-base-turkish-cased-mean-nli-stsb-tr', device='cpu')
                 self.client = chromadb.PersistentClient(path=self.persist_directory)
                 self.collection = self.client.get_or_create_collection(
                     name=self.collection_name,
@@ -67,6 +63,33 @@ class VectorDBService:
                     name="user_feedbacks",
                     metadata={"hnsw:space": "cosine"}
                 )
+                logger.info(f"[VECTOR_DB] Client bağlandı. Mevcut belge sayısı: {self.collection.count()}")
+                return True
+            except Exception as e:
+                logger.error(f"[VECTOR_DB] Client bağlantı hatası: {e}")
+                return False
+
+    def _ensure_model_loaded(self):
+        """Embedding modeli lazy olarak yükle (search/ingest için gerekli)."""
+        if self._model_loaded:
+            return True
+
+        with self._lock:
+            if self._model_loaded:
+                return True
+
+            # Önce client bağlantısını sağla
+            self._ensure_client_connected()
+
+            try:
+                import torch
+                device = "cpu"  # GTX 850M incompatibility
+            except ImportError:
+                device = "cpu"
+
+            logger.info(f"[VECTOR_DB] Embedding modeli yükleniyor ({device.upper()} modunda)...")
+            try:
+                self.model = SentenceTransformer('emrecan/bert-base-turkish-cased-mean-nli-stsb-tr', device=device)
                 self._model_loaded = True
                 logger.info(f"[VECTOR_DB] Model yüklendi. Mevcut belge: {self.collection.count()}")
                 return True
@@ -74,42 +97,38 @@ class VectorDBService:
                 logger.error(f"[VECTOR_DB] Model yüklenemedi: {e}")
                 return False
 
+    @property
     def is_ready(self) -> bool:
-        """Vector DB kullanıma hazır mı?"""
-        if not self._model_loaded:
+        """Vector DB'nin sorgulamaya hazır olup olmadığını kontrol eder (model olmadan)."""
+        self._ensure_client_connected()
+        if not self.collection:
             return False
-        return self.collection is not None and self.collection.count() > 0
-
-    def get_status(self) -> Dict[str, Any]:
-        """Vector DB durumunu döndür"""
-        return {
-            "model_loaded": self._model_loaded,
-            "ingestion_started": self._ingestion_started,
-            "ingestion_complete": self._ingestion_complete,
-            "document_count": self.collection.count() if self.collection else 0,
-            "ready": self.is_ready()
-        }
+        try:
+            return self.collection.count() > 0
+        except:
+            return False
 
     def lazy_ingest(self, poz_data: List[Dict[str, Any]]):
-        """Arka planda ingestion başlat (non-blocking)"""
+        """Arka planda veri yüklemeyi başlat"""
         if self._ingestion_started:
-            logger.warning("[VECTOR_DB] Ingestion zaten başlamış, atlanıyor.")
             return
-
+        
         self._ingestion_started = True
-        self._pending_data = poz_data
-
-        def _background_ingest():
-            logger.info("[VECTOR_DB] Arka plan ingestion başlıyor...")
-            self._ensure_model_loaded()
-            if self.model:
-                self.ingest_data(self._pending_data)
-            self._ingestion_complete = True
-            self._pending_data = None
-
-        thread = threading.Thread(target=_background_ingest, daemon=True)
+        logger.info("[VECTOR_DB] Lazy ingestion tetiklendi...")
+        
+        # Arka planda çalıştır
+        thread = threading.Thread(target=self._ingest_worker, args=(poz_data,))
+        thread.daemon = True
         thread.start()
-        logger.info(f"[VECTOR_DB] Arka plan ingestion başlatıldı ({len(poz_data)} poz).")
+
+    def _ingest_worker(self, poz_data: List[Dict]):
+        """Arka plan thread'i"""
+        try:
+            self._ensure_model_loaded()
+            self.ingest_data(poz_data)
+            self._ingestion_complete = True
+        except Exception as e:
+            logger.error(f"[VECTOR_DB] Arka plan yükleme hatası: {e}")
 
     def ingest_data(self, poz_data: List[Dict[str, Any]]):
         """
@@ -127,7 +146,13 @@ class VectorDBService:
 
         logger.info(f"[VECTOR_DB] {len(poz_data)} poz için ingestion başlıyor...")
         
-        batch_size = 500
+        # Cihaz kapasitesine göre batch size ayarla
+        try:
+            device = self.model.device.type
+        except:
+            device = 'cpu'
+            
+        batch_size = 500 if device == 'cuda' else 100
         total_batches = (len(poz_data) + batch_size - 1) // batch_size
         
         ids = []
@@ -273,3 +298,21 @@ class VectorDBService:
         if self.collection is None:
             return 0
         return self.collection.count()
+
+    def get_status(self) -> Dict[str, Any]:
+        """Servis durumunu döndürür (model olmadan çalışır)."""
+        self._ensure_client_connected()
+        doc_count = 0
+        feedback_count = 0
+        if self.collection:
+            doc_count = self.collection.count()
+        if self.feedback_collection:
+            feedback_count = self.feedback_collection.count()
+
+        return {
+            "initialized": self._model_loaded,
+            "document_count": doc_count,
+            "feedback_count": feedback_count,
+            "model_loaded": self._model_loaded,
+            "device": str(self.model.device) if self.model else "cpu"
+        }

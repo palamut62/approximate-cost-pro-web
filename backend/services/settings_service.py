@@ -61,6 +61,12 @@ class SettingsService:
     def get_settings(self) -> Dict[str, Any]:
         return self.settings
 
+    def reload_settings(self) -> Dict[str, Any]:
+        """Reload settings from file (useful when file is modified externally)."""
+        self.settings = self._load_settings()
+        logger.info(f"Settings reloaded. Current analyze model: {self.settings.get('selected_models', {}).get('analyze')}")
+        return self.settings
+
     def update_settings(self, new_settings: Dict[str, Any]) -> Dict[str, Any]:
         """Update settings and persist."""
         # Deep merge or just replacement? For simplicity, we assume full structure or partial updates at top level
@@ -87,12 +93,32 @@ class SettingsService:
             return []
 
         try:
-            response = requests.get(
-                "https://openrouter.ai/api/v1/models",
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=30
-            )
-            response.raise_for_status()
+            # 3 attempts retry logic
+            response = None
+            last_error = None
+            
+            for attempt in range(3):
+                try:
+                    response = requests.get(
+                        "https://openrouter.ai/api/v1/models",
+                        headers={
+                            "Authorization": f"Bearer {api_key}", 
+                            "HTTP-Referer": "https://approximatecostpro.com",
+                            "X-Title": "Approximate Cost Pro"
+                        },
+                        timeout=30
+                    )
+                    response.raise_for_status()
+                    break # Success
+                except requests.exceptions.RequestException as e:
+                    last_error = e
+                    logger.warning(f"Model update attempt {attempt+1} failed: {e}")
+                    if attempt < 2:
+                        time.sleep(2)
+            
+            if not response:
+                raise last_error or Exception("Failed to connect to OpenRouter")
+
             data = response.json()
             models_list = data.get("data", [])
 

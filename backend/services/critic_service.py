@@ -12,7 +12,7 @@ Kontrol Edilen Kurallar:
 """
 
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict
 from dataclasses import dataclass
 
 @dataclass
@@ -35,25 +35,17 @@ class CriticService:
     """Analiz sonuçlarını kritik hatalar için kontrol eder"""
     
     def __init__(self):
-        # Tipik sektör oranları (referans değerler)
+        from config import get_validation_config
+        _cfg = get_validation_config()
+
         self.typical_ratios = {
-            'rebar_per_concrete': (0.08, 0.15),  # ton/m³ (80-150 kg/m³)
-            'formwork_per_concrete': (5, 8),     # m²/m³
-            'mortar_per_wall_m2': (0.02, 0.05),  # m³/m²
+            'rebar_per_concrete': _cfg.REBAR_PER_CONCRETE,
+            'formwork_per_concrete': _cfg.FORMWORK_PER_CONCRETE,
+            'mortar_per_wall_m2': _cfg.MORTAR_PER_WALL_M2,
         }
+
+        self.typical_prices_per_m2 = _cfg.PRICE_RANGES_PER_M2
         
-        # Tipik fiyat aralıkları (m² başına, TL)
-        self.typical_prices_per_m2 = {
-            'duvar': (500, 2500),
-            'döşeme': (1000, 3500),
-            'betonarme': (1500, 4000),
-            'seramik': (300, 1500),
-            'boya': (50, 150),
-        }
-        
-        # Rule Service
-        from services.rule_service import RuleService
-        # Rule Service
         from services.rule_service import RuleService
         self.rule_service = RuleService()
 
@@ -94,7 +86,12 @@ class CriticService:
         all_issues.extend(self.check_plain_concrete_no_rebar(components, description))
         all_issues.extend(self.check_ready_mix_consistency(components, description))
 
-        # 6. Kullanıcı Tanımlı Kurallar (Öğrenen AI)
+        # 6. Imalat-spesifik eksiklik kontrolleri
+        all_issues.extend(self.check_paint_primer(components, description))
+        all_issues.extend(self.check_betonarme_paspayi(components, description))
+        all_issues.extend(self.check_pipe_bedding(components, description))
+
+        # 7. Kullanıcı Tanımlı Kurallar (Öğrenen AI)
         all_issues.extend(self.check_user_rules(components, description))
 
         # 7. LLM Tabanlı Semantik Kontrol (YENİ - Gerçek Agent)
@@ -108,10 +105,22 @@ class CriticService:
             
             if llm_result.get("status") != "error": # LLM çalıştıysa
                 llm_issues = llm_result.get("issues", [])
+                # Existing messages joined → dedupe check against rule-based issues
+                existing_msgs = " ".join(i.message.lower() for i in all_issues)
+                # Trigger words: if both existing and new issue mention same material → duplicate
+                dedup_keywords = ['demir', 'kalıp', 'harç', 'iskele', 'nakliye',
+                                  'çimento', 'çakıl', 'kum', 'beton', 'tuğla', 'astar']
+
                 for issue in llm_issues:
+                    msg_lower = issue.get("message", "").lower()
+                    # Mevcut issues ile örtüşen material keyword varsa atla
+                    shared = [kw for kw in dedup_keywords if kw in msg_lower and kw in existing_msgs]
+                    if shared:
+                        continue  # Rule-based check daha spesifik → LLM duplicate atılır
+
                     all_issues.append(Issue(
                         severity=issue.get("severity", "warning"),
-                        category=f"AI: {issue.get('category', 'Genel')}", # Kaynağı belli olsun
+                        category=f"AI: {issue.get('category', 'Genel')}",
                         message=issue.get("message", ""),
                         suggestion=issue.get("suggestion", "")
                     ))
@@ -210,8 +219,11 @@ class CriticService:
         
         if concrete and rebar:
             concrete_m3 = concrete.get('quantity', 0)
-            rebar_ton = rebar.get('quantity', 0)
-            
+            rebar_qty = rebar.get('quantity', 0)
+            # Unit normalization: kg → ton
+            rebar_unit = rebar.get('unit', 'ton').lower()
+            rebar_ton = rebar_qty / 1000 if rebar_unit == 'kg' else rebar_qty
+
             if concrete_m3 > 0:
                 ratio = rebar_ton / concrete_m3
                 min_ratio, max_ratio = self.typical_ratios['rebar_per_concrete']
@@ -356,7 +368,20 @@ class CriticService:
                 message="HAZIR BETON imalatında çimento/kum/çakıl ayrıca YAZILMAZ.",
                 suggestion="Hazır beton zaten bu bileşenleri içerir. Agrega ve çimento kalemlerini silin."
             ))
-            
+
+        # Hazır beton nakliyesi kontrolü: transmikser ile gelir → ayrı nakliye satırı olmamalı
+        has_beton_nakliye = any(
+            any(kw in c.get('name', '').lower() for kw in ['beton nakliye', 'hazır beton nakliye'])
+            for c in components if c.get('type', '') == 'Nakliye'
+        )
+        if has_beton_nakliye:
+            issues.append(Issue(
+                severity="critical",
+                category="Mükerrer Nakliye",
+                message="HAZIR BETON nakliyesi birim fiyata dahildir — ayrı satır olarak yazılmamalı.",
+                suggestion="Hazır beton transmikser ile doğrudan sahasına gelir. 'Beton nakliyesi' kalemini silin."
+            ))
+
         return issues
 
     def check_missing_labor(self, components: List[Dict]) -> List[Issue]:
@@ -373,7 +398,77 @@ class CriticService:
                 message="Malzeme var ama işçilik bulunamadı",
                 suggestion="İnşaat işlerinde genellikle işçilik gerekir. Kontrol edin."
             ))
-        
+
+        return issues
+
+    def check_paint_primer(self, components: List[Dict], description: str) -> List[Issue]:
+        """Boya imalatında astar zorunlu"""
+        issues = []
+        desc_lower = description.lower()
+
+        has_paint_keyword = any(kw in desc_lower for kw in ['boya', 'boyama', 'badana'])
+        has_paint_comp = any('boya' in c.get('name', '').lower() or 'badana' in c.get('name', '').lower()
+                            for c in components)
+
+        if not (has_paint_keyword or has_paint_comp):
+            return issues
+
+        has_primer = any('astar' in c.get('name', '').lower() for c in components)
+        if not has_primer and 'astar hariç' not in desc_lower:
+            issues.append(Issue(
+                severity="critical",
+                category="Eksik Malzeme",
+                message="Boya imalatında astar bulunamadı",
+                suggestion="Astar olmadan boya yapılmaz. Astar malzeme kalemini ekleyin."
+            ))
+
+        return issues
+
+    def check_betonarme_paspayi(self, components: List[Dict], description: str) -> List[Issue]:
+        """Betonarme imalatında paspayı kontrolü"""
+        issues = []
+        desc_lower = description.lower()
+
+        is_betonarme = 'betonarme' in desc_lower
+        has_rebar = any(any(kw in c.get('name', '').lower() for kw in ['demir', 'donatı', 'nervürlü'])
+                       for c in components)
+
+        if not (is_betonarme and has_rebar):
+            return issues
+
+        has_paspayi = any('paspayı' in c.get('name', '').lower() or 'paspa' in c.get('name', '').lower()
+                         for c in components)
+        if not has_paspayi and 'paspayı hariç' not in desc_lower:
+            issues.append(Issue(
+                severity="warning",
+                category="Eksik Malzeme",
+                message="Betonarme imalatında paspayı bulunamadı",
+                suggestion="Demir altı paspayı (tipik 2-3 cm) teknik bir zorunluluktur. Ekleyin."
+            ))
+
+        return issues
+
+    def check_pipe_bedding(self, components: List[Dict], description: str) -> List[Issue]:
+        """Boru döşemede yatek malzeme kontrolü"""
+        issues = []
+        desc_lower = description.lower()
+
+        has_pipe = any(kw in desc_lower for kw in ['boru döşeme', 'boru hatı', 'boru imalat'])
+        has_pipe_comp = any('boru' in c.get('name', '').lower() for c in components)
+
+        if not (has_pipe or has_pipe_comp):
+            return issues
+
+        has_bedding = any(any(kw in c.get('name', '').lower() for kw in ['yatek', 'kum', 'dolgu'])
+                         for c in components)
+        if not has_bedding and 'yatek hariç' not in desc_lower:
+            issues.append(Issue(
+                severity="warning",
+                category="Eksik Malzeme",
+                message="Boru döşemede yatek malzeme (kum/dolgu) bulunamadı",
+                suggestion="Boru altı yatek tabakası (tipik kum veya dolgu) döşemede zorunludur."
+            ))
+
         return issues
 
     def check_user_rules(self, components: List[Dict], description: str) -> List[Issue]:
