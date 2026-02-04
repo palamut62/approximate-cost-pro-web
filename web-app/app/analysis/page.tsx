@@ -506,522 +506,525 @@ export default function AnalysisPage() {
                         <div className="space-y-1">
                             <div className="flex justify-between items-end">
                                 <span className="text-xs text-[#a1a1aa]">Kalan</span>
-                                <span className={cn("text-sm font-bold font-mono", (usageData.remaining ?? 0) < 5 ? "text-red-500" : "text-green-500")}>
+                                <span className={cn("text-sm font-bold font-mono", usageData.is_low_balance ? "text-red-500" : "text-green-500")}>
                                     ${(usageData.remaining ?? 0).toFixed(2)}
                                 </span>
                             </div>
                             <div className="flex justify-between items-end">
-                                <span className="text-xs text-[#a1a1aa]">Harcanan</span>
-                                <span className="text-sm font-bold text-[#fafafa] font-mono">${(usageData.total_usage ?? 0).toFixed(2)}</span>
-                            </div>
-                            <div className="w-full h-px bg-[#27272a] my-1" />
-                            <div className="flex justify-between items-end">
                                 <span className="text-xs text-[#a1a1aa]">Limit</span>
                                 <span className="text-sm font-bold text-[#71717a] font-mono">${(usageData.total_credits ?? 0).toFixed(2)}</span>
                             </div>
+                            {usageData.is_low_balance && (
+                                <div className="mt-2 text-[10px] text-red-500 font-bold bg-red-500/10 px-2 py-1 rounded flex items-center justify-center gap-1 animate-pulse">
+                                    <AlertTriangle className="w-3 h-3" />
+                                    BAKİYE AZALDI
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>
             </div>
-            {!result ? (
-                // Initial State - Centered Search (Refined Bolt Aesthetic)
-                <div className="flex-1 flex flex-col items-center justify-start pt-20 px-4 max-w-4xl mx-auto w-full">
-                    <motion.div
-                        initial={{ opacity: 0, y: 20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.6, ease: "easeOut" }}
-                        className="w-full space-y-10"
-                    >
-                        <div className="text-center space-y-4">
-                            <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full text-blue-500 text-[10px] font-bold uppercase tracking-widest mb-2">
-                                <Sparkles className="w-3 h-3" />
-                                Yapay Zeka Destekli Analiz
+            {
+                !result ? (
+                    // Initial State - Centered Search (Refined Bolt Aesthetic)
+                    <div className="flex-1 flex flex-col items-center justify-start pt-20 px-4 max-w-4xl mx-auto w-full">
+                        <motion.div
+                            initial={{ opacity: 0, y: 20 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.6, ease: "easeOut" }}
+                            className="w-full space-y-10"
+                        >
+                            <div className="text-center space-y-4">
+                                <div className="inline-flex items-center gap-2 px-3 py-1 bg-blue-500/10 border border-blue-500/20 rounded-full text-blue-500 text-[10px] font-bold uppercase tracking-widest mb-2">
+                                    <Sparkles className="w-3 h-3" />
+                                    Yapay Zeka Destekli Analiz
+                                </div>
+                                <h1 className="text-5xl md:text-7xl font-bold text-[#fafafa] tracking-tight leading-[1.1]">
+                                    Ne inşa etmek <br /> <span className="text-blue-500">istersiniz?</span>
+                                </h1>
+                                <p className="text-lg text-[#71717a] max-w-xl mx-auto leading-relaxed">
+                                    Saniyeler içinde detaylı poz analizi ve birim fiyat oluşturun.
+                                    Teknik tanımları girin, gerisini AI halletsin.
+                                </p>
                             </div>
-                            <h1 className="text-5xl md:text-7xl font-bold text-[#fafafa] tracking-tight leading-[1.1]">
-                                Ne inşa etmek <br /> <span className="text-blue-500">istersiniz?</span>
-                            </h1>
-                            <p className="text-lg text-[#71717a] max-w-xl mx-auto leading-relaxed">
-                                Saniyeler içinde detaylı poz analizi ve birim fiyat oluşturun.
-                                Teknik tanımları girin, gerisini AI halletsin.
-                            </p>
-                        </div>
 
-                        <div className="relative max-w-2xl mx-auto">
-                            {/* Glow Effect */}
-                            <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl blur opacity-10 group-focus-within:opacity-25 transition duration-1000 group-focus-within:duration-200"></div>
+                            <div className="relative max-w-2xl mx-auto">
+                                {/* Glow Effect */}
+                                <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl blur opacity-10 group-focus-within:opacity-25 transition duration-1000 group-focus-within:duration-200"></div>
 
-                            <div className="relative bg-[#18181b] p-2 rounded-2xl shadow-3xl border border-[#27272a] group focus-within:border-blue-500/50 transition-all duration-300">
-                                <textarea
-                                    ref={textareaRef}
-                                    placeholder="Örn: C30/37 betonarme perde duvar yapılması..."
-                                    value={description}
-                                    onChange={(e) => setDescription(e.target.value)}
-                                    onKeyDown={(e) => {
-                                        if (e.key === 'Enter' && !e.shiftKey && !loading && description) {
-                                            e.preventDefault();
-                                            handleAnalyze();
-                                        }
-                                    }}
-                                    rows={1}
-                                    className="w-full bg-transparent text-[#fafafa] text-lg placeholder-[#3f3f46] border-none outline-none resize-none min-h-[80px] max-h-[300px] p-4 pr-16 custom-scrollbar"
-                                />
+                                <div className="relative bg-[#18181b] p-2 rounded-2xl shadow-3xl border border-[#27272a] group focus-within:border-blue-500/50 transition-all duration-300">
+                                    <textarea
+                                        ref={textareaRef}
+                                        placeholder="Örn: C30/37 betonarme perde duvar yapılması..."
+                                        value={description}
+                                        onChange={(e) => setDescription(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && !e.shiftKey && !loading && description) {
+                                                e.preventDefault();
+                                                handleAnalyze();
+                                            }
+                                        }}
+                                        rows={1}
+                                        className="w-full bg-transparent text-[#fafafa] text-lg placeholder-[#3f3f46] border-none outline-none resize-none min-h-[80px] max-h-[300px] p-4 pr-16 custom-scrollbar"
+                                    />
 
-                                <div className="absolute right-4 bottom-4 flex items-center gap-2">
-                                    <button
-                                        onClick={handleRefineRequest}
-                                        disabled={refineRequestLoading || !description.trim()}
-                                        className="p-2.5 text-[#71717a] hover:text-[#fafafa] hover:bg-[#27272a] rounded-xl transition-all border border-transparent hover:border-[#3f3f46]"
-                                        title="AI ile profesyonel ifadeye dönüştür"
-                                    >
-                                        {refineRequestLoading ? (
-                                            <Loader2 className="w-5 h-5 animate-spin" />
-                                        ) : (
-                                            <Sparkles className="w-5 h-5" />
-                                        )}
-                                    </button>
-                                    <button
-                                        onClick={handleAnalyze}
-                                        disabled={loading || !description.trim()}
-                                        className="p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] active:scale-95 flex items-center justify-center min-w-[48px]"
-                                    >
-                                        {loading ? (
-                                            <Loader2 className="w-5 h-5 animate-spin" />
-                                        ) : (
-                                            <ArrowRight className="w-5 h-5" />
-                                        )}
-                                    </button>
+                                    <div className="absolute right-4 bottom-4 flex items-center gap-2">
+                                        <button
+                                            onClick={handleRefineRequest}
+                                            disabled={refineRequestLoading || !description.trim()}
+                                            className="p-2.5 text-[#71717a] hover:text-[#fafafa] hover:bg-[#27272a] rounded-xl transition-all border border-transparent hover:border-[#3f3f46]"
+                                            title="AI ile profesyonel ifadeye dönüştür"
+                                        >
+                                            {refineRequestLoading ? (
+                                                <Loader2 className="w-5 h-5 animate-spin" />
+                                            ) : (
+                                                <Sparkles className="w-5 h-5" />
+                                            )}
+                                        </button>
+                                        <button
+                                            onClick={handleAnalyze}
+                                            disabled={loading || !description.trim()}
+                                            className="p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] active:scale-95 flex items-center justify-center min-w-[48px]"
+                                        >
+                                            {loading ? (
+                                                <Loader2 className="w-5 h-5 animate-spin" />
+                                            ) : (
+                                                <ArrowRight className="w-5 h-5" />
+                                            )}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
 
-                        {/* Suggestions / Quick Chips - DSI Odaklı */}
-                        <div className="flex flex-wrap items-center justify-center gap-3">
-                            <div className="w-full text-center text-[10px] font-bold text-[#52525b] uppercase tracking-widest mb-2">Popüler Aramalar (DSİ)</div>
-                            <button onClick={() => setDescription("Taşkın koruma duvarı yapılması (C30 beton, kalıp, demir dahil)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
-                                Taşkın Koruma Duvarı
-                            </button>
-                            <button onClick={() => setDescription("Betonarme istinat duvarı yapılması (Barbakan, drenaj ve geri dolgu dahil)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
-                                İstinat Duvarı
-                            </button>
-                            <button onClick={() => setDescription("Harçlı taş duvar örülmesi (60 cm kalınlıkta, derzli)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
-                                Taş Duvar
-                            </button>
-                            <button onClick={() => setDescription("Trapez kesitli sulama kanalı betonu dökülmesi (C20, perdahlı)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
-                                Trapez Kanal
-                            </button>
-                            <button onClick={() => setDescription("Kutu menfez yapılması (Kazı, betonarme, yalıtım dahil)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
-                                Kutu Menfez
-                            </button>
-                            <button onClick={() => setDescription("Taşkın koruma tesisi için brit yapılması (Grobeton, taş dolgu)")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
-                                Brit Yapısı
-                            </button>
-                        </div>
-                    </motion.div>
-                </div>
-            ) : (
-                // Result View
-                <div className="max-w-5xl mx-auto w-full space-y-10 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
-                    <div className="bg-[#18181b] rounded-2xl border border-[#27272a] p-8 shadow-2xl relative overflow-hidden group">
-                        {/* Abstract Background Detail */}
-                        <div className="absolute top-0 right-0 w-64 h-64 bg-blue-600/5 rounded-full blur-3xl -mr-32 -mt-32 group-hover:bg-blue-600/10 transition-colors duration-1000"></div>
-
-                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
-                            <div className="flex items-start gap-5">
-                                <div className="p-4 bg-blue-600/10 text-blue-500 rounded-2xl border border-blue-500/20 shadow-inner">
-                                    <Sparkles className="w-8 h-8" />
-                                </div>
-                                <div className="space-y-2">
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest px-2 py-0.5 bg-blue-600/10 border border-blue-500/20 rounded">Analiz Tamamlandı</span>
-                                        <span className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest">{new Date().toLocaleDateString('tr-TR')}</span>
-                                    </div>
-                                    <h2 className="text-2xl md:text-3xl font-bold text-[#fafafa] tracking-tight leading-tight">
-                                        {description}
-                                    </h2>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-3 self-end md:self-center">
-                                <button
-                                    onClick={() => setResult(null)}
-                                    className="p-3 bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-xl border border-[#3f3f46] transition-all hover:bg-[#3f3f46] shadow-lg active:scale-95"
-                                    title="Yeni Analiz"
-                                >
-                                    <Plus className="w-5 h-5" />
+                            {/* Suggestions / Quick Chips - DSI Odaklı */}
+                            <div className="flex flex-wrap items-center justify-center gap-3">
+                                <div className="w-full text-center text-[10px] font-bold text-[#52525b] uppercase tracking-widest mb-2">Popüler Aramalar (DSİ)</div>
+                                <button onClick={() => setDescription("Taşkın koruma tesisi kapsamında betonarme perde duvar yapılması. İş kapsamında C30/37 hazır beton kullanılması, nervürlü donatı demiri işlenmesi ve döşenmesi, çelik kalıp kullanılması, dilatasyon derzlerinin teşkili ve kür bakımı dahildir.")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                    Taşkın Koruma Duvarı
                                 </button>
-                                <button
-                                    onClick={() => setResult(null)}
-                                    className="p-3 bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-xl border border-[#3f3f46] transition-all hover:bg-[#3f3f46] shadow-lg active:scale-95"
-                                    title="Kapat"
-                                >
-                                    <X className="w-5 h-5" />
+                                <button onClick={() => setDescription("Betonarme istinat duvarı yapılması. Temel ve perde betonu olarak C30/37 kullanılması, barbakan borularının yerleştirilmesi, duvar arkası drenaj levhası ve geotekstil keçe serilmesi, kırmataş ile geri dolgu yapılması ve sıkıştırılması.")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                    İstinat Duvarı
+                                </button>
+                                <button onClick={() => setDescription("Dere ıslahı için harçlı taş duvar örülmesi. Ocak taşı kullanılarak, 250 dozlu çimento harcı ile ortalama 60 cm kalınlığında duvar örülmesi, görünen yüzeylerin derzlenmesi, 5 cm çapında PVC barbakan borularının yerleştirilmesi.")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                    Taş Duvar
+                                </button>
+                                <button onClick={() => setDescription("Sulama tesisi için trapez kesitli beton kaplama yapılması. C20/25 betonu ile 10 cm kalınlığında kaplama yapılması, yüzeyin perdahlanması, enine ve boyuna derzlerin açılması ve bitümlü macun ile doldurulması, geotekstil keçe serilmesi.")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                    Trapez Kanal
+                                </button>
+                                <button onClick={() => setDescription("Yol geçişi için betonarme kutu menfez yapılması. Temel kazısı yapılması, grobeton dökülmesi, C30/37 betonu ile tabliye ve perdelerin dökülmesi, su yalıtımı yapılması ve uygun malzeme ile dolgu yapılarak sıkıştırılması.")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                    Kutu Menfez
+                                </button>
+                                <button onClick={() => setDescription("Taşkın koruma tesisi tabanına brit (çentik) yapılması. Kazı yapılması, C20/25 betonu dökülmesi, ankaraj demirlerinin yerleştirilmesi ve taş dolgu tahkimatı yapılması.")} className="px-5 py-2.5 bg-[#18181b]/50 border border-[#27272a] rounded-xl text-sm text-[#71717a] hover:text-[#fafafa] hover:border-blue-500/50 hover:bg-blue-500/5 transition-all active:scale-95">
+                                    Brit Yapısı
                                 </button>
                             </div>
-                        </div>
-
-                        {/* Technical Specification Block (New) */}
-                        {result.technical_specification && (
-                            <div className="bg-[#18181b]/50 border border-[#27272a] rounded-xl overflow-hidden">
-                                <button
-                                    onClick={() => toggleSection('spec')}
-                                    className="w-full flex items-center justify-between p-4 bg-[#27272a]/30 hover:bg-[#27272a]/50 transition-colors"
-                                >
-                                    <div className="flex items-center gap-3">
-                                        <FileText className="w-5 h-5 text-amber-500" />
-                                        <h3 className="text-sm font-bold text-[#fafafa] uppercase tracking-widest">Yapım Şartları ve Teknik Tarif</h3>
-                                    </div>
-                                    <ChevronDown className={cn("w-5 h-5 text-[#71717a] transition-transform", sections.spec ? "rotate-180" : "")} />
-                                </button>
-
-                                {sections.spec && (
-                                    <div className="p-6 text-[#a1a1aa] text-sm leading-relaxed border-t border-[#27272a] whitespace-pre-line font-mono bg-[#09090b]">
-                                        {result.technical_specification}
-                                    </div>
-                                )}
-                            </div>
-                        )}
+                        </motion.div>
                     </div>
+                ) : (
+                    // Result View
+                    <div className="max-w-5xl mx-auto w-full space-y-10 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
+                        <div className="bg-[#18181b] rounded-2xl border border-[#27272a] p-8 shadow-2xl relative overflow-hidden group">
+                            {/* Abstract Background Detail */}
+                            <div className="absolute top-0 right-0 w-64 h-64 bg-blue-600/5 rounded-full blur-3xl -mr-32 -mt-32 group-hover:bg-blue-600/10 transition-colors duration-1000"></div>
 
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                        {/* Left Column: Stats & Technical Data */}
-                        <div className="lg:col-span-2 space-y-8">
-                            {/* Analiz Adı Editor */}
-                            <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-6 group focus-within:border-blue-500/30 transition-colors">
-                                <div className="flex items-center gap-2 mb-4">
-                                    <FileText className="w-4 h-4 text-[#52525b]" />
-                                    <label className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest italic">Dosya Adı / Kayıt Başlığı</label>
-                                </div>
-                                <input
-                                    type="text"
-                                    value={analysisName}
-                                    onChange={(e) => setAnalysisName(e.target.value)}
-                                    placeholder="Analiz adı girin..."
-                                    className="w-full px-0 bg-transparent border-none outline-none text-xl font-bold text-[#fafafa] placeholder-[#3f3f46] transition-colors"
-                                />
-                            </div>
-
-                            {/* Trust Score & Warnings */}
-                            {result.metadata && (
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    {/* Analysis Score */}
-                                    <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-8 space-y-6">
-                                        <div className="flex justify-between items-center">
-                                            <div className="space-y-1">
-                                                <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none">AI Güven Skoru</h3>
-                                                <p className="text-sm text-white font-medium">Analiz hassasiyeti ve veri doğruluğu</p>
-                                            </div>
-                                            <div className={cn(
-                                                "text-4xl font-black tracking-tighter transition-colors",
-                                                result.metadata.analysis_score >= 85 ? "text-green-500" :
-                                                    result.metadata.analysis_score >= 60 ? "text-amber-500" : "text-red-500"
-                                            )}>
-                                                %{result.metadata.analysis_score}
-                                            </div>
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+                                <div className="flex items-start gap-5">
+                                    <div className="p-4 bg-blue-600/10 text-blue-500 rounded-2xl border border-blue-500/20 shadow-inner">
+                                        <Sparkles className="w-8 h-8" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[10px] font-bold text-blue-500 uppercase tracking-widest px-2 py-0.5 bg-blue-600/10 border border-blue-500/20 rounded">Analiz Tamamlandı</span>
+                                            <span className="text-[10px] font-bold text-[#52525b] uppercase tracking-widest">{new Date().toLocaleDateString('tr-TR')}</span>
                                         </div>
-                                        <div className="w-full bg-[#09090b] rounded-full h-3 border border-[#27272a] p-0.5">
-                                            <motion.div
-                                                initial={{ width: 0 }}
-                                                animate={{ width: `${result.metadata.analysis_score}%` }}
-                                                transition={{ duration: 1.5, ease: "circOut" }}
-                                                className={cn(
-                                                    "h-full rounded-full shadow-[0_0_10px_-2px_rgba(0,0,0,0.5)]",
-                                                    result.metadata.analysis_score >= 85 ? "bg-gradient-to-r from-green-600 to-green-400" :
-                                                        result.metadata.analysis_score >= 60 ? "bg-gradient-to-r from-amber-600 to-amber-400" : "bg-gradient-to-r from-red-600 to-red-400"
-                                                )}
-                                            ></motion.div>
-                                        </div>
-                                        <div className="flex items-start gap-3 p-4 bg-[#09090b] rounded-xl border border-[#27272a]">
-                                            <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-                                            <p className="text-xs text-[#71717a] leading-relaxed">
-                                                {result.metadata.analysis_score >= 85 ? "Bu analiz yüksek düzeyde veri doğruluğu içermektedir. Veriler resmi poz veritabanı ile tam uyumludur." :
-                                                    result.metadata.analysis_score >= 60 ? "Analiz verileri benzer imalat türleri üzerinden türetilmiştir. Kalem fiyatlarını gözden geçirmeniz önerilir." :
-                                                        "Düşük güvenirlik düzeyi. Lütfen tüm kalemleri manuel olarak doğrulayın."}
-                                            </p>
-                                        </div>
+                                        <h2 className="text-2xl md:text-3xl font-bold text-[#fafafa] tracking-tight leading-tight">
+                                            {description}
+                                        </h2>
                                     </div>
                                 </div>
-                            )}
-
-                            {/* Advanced Metrics (Consensus/Consistency/CoT) */}
-                            {result.advanced_metrics && (
-                                <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-6 space-y-4">
-                                    <div className="flex items-center gap-2">
-                                        <Sparkles className="w-4 h-4 text-purple-500" />
-                                        <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none">Gelişmiş Analiz Metrikleri</h3>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        {/* Consensus Score */}
-                                        {result.advanced_metrics.consensus_score !== undefined && (
-                                            <div className="p-4 bg-[#09090b] rounded-xl border border-[#27272a] space-y-2">
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest">Konsensüs Skoru</span>
-                                                    <span className="text-xs text-[#52525b]">{result.advanced_metrics.model_count} model</span>
-                                                </div>
-                                                <div className={cn(
-                                                    "text-2xl font-black tracking-tight",
-                                                    result.advanced_metrics.consensus_score >= 0.7 ? "text-green-500" :
-                                                        result.advanced_metrics.consensus_score >= 0.4 ? "text-amber-500" : "text-red-500"
-                                                )}>
-                                                    %{Math.round(result.advanced_metrics.consensus_score * 100)}
-                                                </div>
-                                                <p className="text-[10px] text-[#52525b]">
-                                                    {result.advanced_metrics.consensus_score >= 0.7 ? "Modeller güçlü uyum gösteriyor" :
-                                                        result.advanced_metrics.consensus_score >= 0.4 ? "Kısmi uyum mevcut" : "Modeller arası farklılıklar var"}
-                                                </p>
-                                            </div>
-                                        )}
-
-                                        {/* Consistency Score */}
-                                        {result.advanced_metrics.consistency_score !== undefined && (
-                                            <div className="p-4 bg-[#09090b] rounded-xl border border-[#27272a] space-y-2">
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest">Tutarlılık Skoru</span>
-                                                    <span className="text-xs text-[#52525b]">{result.advanced_metrics.sample_count} örnek</span>
-                                                </div>
-                                                <div className={cn(
-                                                    "text-2xl font-black tracking-tight",
-                                                    result.advanced_metrics.consistency_score >= 0.7 ? "text-green-500" :
-                                                        result.advanced_metrics.consistency_score >= 0.4 ? "text-amber-500" : "text-red-500"
-                                                )}>
-                                                    %{Math.round(result.advanced_metrics.consistency_score * 100)}
-                                                </div>
-                                                {result.advanced_metrics.consistency_warning ? (
-                                                    <p className="text-[10px] text-amber-500 flex items-center gap-1">
-                                                        <AlertTriangle className="w-3 h-3" />
-                                                        {result.advanced_metrics.consistency_warning}
-                                                    </p>
-                                                ) : (
-                                                    <p className="text-[10px] text-[#52525b]">
-                                                        {result.advanced_metrics.consistency_score >= 0.7 ? "Sonuçlar yüksek tutarlılık gösteriyor" : "Sonuçları gözden geçirin"}
-                                                    </p>
-                                                )}
-                                            </div>
-                                        )}
-
-                                        {/* CoT Mode */}
-                                        {result.advanced_metrics.cot_enabled && (
-                                            <div className="p-4 bg-[#09090b] rounded-xl border border-purple-500/20 space-y-2">
-                                                <span className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest">Chain-of-Thought</span>
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
-                                                    <span className="text-sm font-semibold text-purple-400">Aktif</span>
-                                                </div>
-                                                <p className="text-[10px] text-[#52525b]">
-                                                    Adım adım düşünme modu ile analiz yapıldı
-                                                </p>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Critic Review (AI Feedback Loop) */}
-                            {result.critic_review && result.critic_review.status !== 'ok' && (
-                                <div className={cn(
-                                    "p-8 rounded-2xl border-2 shadow-2xl space-y-6",
-                                    result.critic_review.status === 'error' ? "bg-red-500/5 border-red-500/20" : "bg-amber-500/5 border-amber-500/20"
-                                )}>
-                                    <div className="flex items-center gap-4">
-                                        <div className={cn(
-                                            "p-3 rounded-xl border mb-2",
-                                            result.critic_review.status === 'error' ? "bg-red-500/10 border-red-500/20 text-red-500" : "bg-amber-500/10 border-amber-500/20 text-amber-500"
-                                        )}>
-                                            <GraduationCap className="w-6 h-6" />
-                                        </div>
-                                        <div>
-                                            <h4 className={cn("text-lg font-bold tracking-tight mb-1", result.critic_review.status === 'error' ? "text-red-500" : "text-amber-500")}>
-                                                {result.critic_review.status === 'error' ? "Eleştirmen AI: Kritik Sorunlar" : "Eleştirmen AI: İyileştirme Önerileri"}
-                                            </h4>
-                                            <p className="text-xs text-[#71717a] font-medium leading-none">Analiz süreci denetlendi ve iyileştirme kalemleri belirlendi.</p>
-                                        </div>
-                                    </div>
-
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                        {result.critic_review.issues.map((issue, idx) => (
-                                            <div key={idx} className="p-4 bg-[#09090b]/50 rounded-xl border border-[#27272a] space-y-2 group hover:border-blue-500/30 transition-colors">
-                                                <div className="flex items-center justify-between">
-                                                    <span className={cn(
-                                                        "text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-widest",
-                                                        issue.severity === 'critical' ? "bg-red-500/20 text-red-500 border border-red-500/30" : "bg-amber-500/20 text-amber-500 border border-amber-500/30"
-                                                    )}>
-                                                        {issue.category}
-                                                    </span>
-                                                    {issue.severity === 'critical' && <XCircle className="w-3 h-3 text-red-500" />}
-                                                </div>
-                                                <p className="text-sm text-[#fafafa] font-medium leading-relaxed">{issue.message}</p>
-                                                {issue.suggestion && (
-                                                    <div className="pt-2 flex items-center gap-2 text-[11px] text-[#71717a] italic">
-                                                        <Sparkles className="w-3 h-3 text-blue-500 shrink-0" />
-                                                        <span className="flex-1">💡 {issue.suggestion}</span>
-                                                        {["Eksik Kalem", "Eksik Malzeme", "Öğrenilmiş Kural"].includes(issue.category) && (
-                                                            <button
-                                                                onClick={() => handleLearnRule(issue)}
-                                                                className="not-italic bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded-lg px-2.5 py-1 text-[10px] whitespace-nowrap transition-colors shrink-0"
-                                                                title="Bu düzeltmeyi kural olarak kaydet"
-                                                            >
-                                                                + Kural Yap
-                                                            </button>
-                                                        )}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Explanation */}
-                            <div className="bg-blue-900/10 border border-blue-500/20 rounded-xl p-6">
-                                <div className="flex items-start">
-                                    <Info className="w-5 h-5 text-blue-500 mr-3 mt-0.5 flex-shrink-0" />
-                                    <div className="text-blue-400 text-sm leading-relaxed whitespace-pre-wrap">
-                                        {result.explanation}
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Technical Description (Tarif) */}
-                            {result.technical_description && (
-                                <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-6">
-                                    <div className="flex items-start">
-                                        <FileText className="w-5 h-5 text-[#a1a1aa] mr-3 mt-0.5 flex-shrink-0" />
-                                        <div className="space-y-2">
-                                            <h4 className="text-sm font-bold text-white uppercase tracking-tight">Teknik Tarif / Yapım Şartları</h4>
-                                            <div className="text-[#a1a1aa] text-sm leading-relaxed italic whitespace-pre-wrap">
-                                                {result.technical_description}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Detail Table */}
-                            <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] overflow-hidden">
-                                <div className="p-6 border-b border-[#27272a] flex items-center justify-between bg-black/20">
-                                    <div className="flex items-center gap-3">
-                                        <Table className="w-5 h-5 text-blue-500" />
-                                        <h3 className="text-sm font-bold text-[#fafafa] uppercase tracking-widest leading-none">Analiz Detay Cetveli</h3>
-                                    </div>
+                                <div className="flex items-center gap-3 self-end md:self-center">
                                     <button
-                                        onClick={addNewComponent}
-                                        className="px-4 py-2 bg-[#27272a] text-[#fafafa] rounded-xl border border-[#3f3f46] hover:bg-[#3f3f46] transition-all text-xs font-bold flex items-center gap-2 group active:scale-95"
+                                        onClick={() => setResult(null)}
+                                        className="p-3 bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-xl border border-[#3f3f46] transition-all hover:bg-[#3f3f46] shadow-lg active:scale-95"
+                                        title="Yeni Analiz"
                                     >
-                                        <Plus className="w-3 h-3 text-blue-500 group-hover:scale-125 transition-transform" />
-                                        KALEM EKLE
+                                        <Plus className="w-5 h-5" />
+                                    </button>
+                                    <button
+                                        onClick={() => setResult(null)}
+                                        className="p-3 bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-xl border border-[#3f3f46] transition-all hover:bg-[#3f3f46] shadow-lg active:scale-95"
+                                        title="Kapat"
+                                    >
+                                        <X className="w-5 h-5" />
                                     </button>
                                 </div>
-                                <div className="p-1">
-                                    <AnalysisTable
-                                        data={(result.analysis_data && result.analysis_data.components && result.analysis_data.components.length > 0)
-                                            ? result.analysis_data
-                                            : {
-                                                poz_no: "Y.ANALİZ",
-                                                name: analysisName || description,
-                                                unit: displayUnit,
-                                                components: result.components.map(c => ({
-                                                    type: c.type,
-                                                    code: c.code,
-                                                    name: c.name,
-                                                    unit: c.unit,
-                                                    quantity: c.quantity.toString(),
-                                                    price: c.unit_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                    total: c.total_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 })
-                                                })),
-                                                totals: {
-                                                    subtotal: subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                    profit: overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                    grand_total: grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
-                                                    label: `1 ${displayUnit} Fiyatı`
-                                                }
-                                            }}
-                                        description={result.technical_description || result.explanation}
+                            </div>
+
+                            {/* Technical Specification Block (New) */}
+                            {result.technical_specification && (
+                                <div className="bg-[#18181b]/50 border border-[#27272a] rounded-xl overflow-hidden">
+                                    <button
+                                        onClick={() => toggleSection('spec')}
+                                        className="w-full flex items-center justify-between p-4 bg-[#27272a]/30 hover:bg-[#27272a]/50 transition-colors"
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <FileText className="w-5 h-5 text-amber-500" />
+                                            <h3 className="text-sm font-bold text-[#fafafa] uppercase tracking-widest">Yapım Şartları ve Teknik Tarif</h3>
+                                        </div>
+                                        <ChevronDown className={cn("w-5 h-5 text-[#71717a] transition-transform", sections.spec ? "rotate-180" : "")} />
+                                    </button>
+
+                                    {sections.spec && (
+                                        <div className="p-6 text-[#a1a1aa] text-sm leading-relaxed border-t border-[#27272a] whitespace-pre-line font-mono bg-[#09090b]">
+                                            {result.technical_specification}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                            {/* Left Column: Stats & Technical Data */}
+                            <div className="lg:col-span-2 space-y-8">
+                                {/* Analiz Adı Editor */}
+                                <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-6 group focus-within:border-blue-500/30 transition-colors">
+                                    <div className="flex items-center gap-2 mb-4">
+                                        <FileText className="w-4 h-4 text-[#52525b]" />
+                                        <label className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest italic">Dosya Adı / Kayıt Başlığı</label>
+                                    </div>
+                                    <input
+                                        type="text"
+                                        value={analysisName}
+                                        onChange={(e) => setAnalysisName(e.target.value)}
+                                        placeholder="Analiz adı girin..."
+                                        className="w-full px-0 bg-transparent border-none outline-none text-xl font-bold text-[#fafafa] placeholder-[#3f3f46] transition-colors"
                                     />
                                 </div>
+
+                                {/* Trust Score & Warnings */}
+                                {result.metadata && (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        {/* Analysis Score */}
+                                        <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-8 space-y-6">
+                                            <div className="flex justify-between items-center">
+                                                <div className="space-y-1">
+                                                    <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none">AI Güven Skoru</h3>
+                                                    <p className="text-sm text-white font-medium">Analiz hassasiyeti ve veri doğruluğu</p>
+                                                </div>
+                                                <div className={cn(
+                                                    "text-4xl font-black tracking-tighter transition-colors",
+                                                    result.metadata.analysis_score >= 85 ? "text-green-500" :
+                                                        result.metadata.analysis_score >= 60 ? "text-amber-500" : "text-red-500"
+                                                )}>
+                                                    %{result.metadata.analysis_score}
+                                                </div>
+                                            </div>
+                                            <div className="w-full bg-[#09090b] rounded-full h-3 border border-[#27272a] p-0.5">
+                                                <motion.div
+                                                    initial={{ width: 0 }}
+                                                    animate={{ width: `${result.metadata.analysis_score}%` }}
+                                                    transition={{ duration: 1.5, ease: "circOut" }}
+                                                    className={cn(
+                                                        "h-full rounded-full shadow-[0_0_10px_-2px_rgba(0,0,0,0.5)]",
+                                                        result.metadata.analysis_score >= 85 ? "bg-gradient-to-r from-green-600 to-green-400" :
+                                                            result.metadata.analysis_score >= 60 ? "bg-gradient-to-r from-amber-600 to-amber-400" : "bg-gradient-to-r from-red-600 to-red-400"
+                                                    )}
+                                                ></motion.div>
+                                            </div>
+                                            <div className="flex items-start gap-3 p-4 bg-[#09090b] rounded-xl border border-[#27272a]">
+                                                <Info className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
+                                                <p className="text-xs text-[#71717a] leading-relaxed">
+                                                    {result.metadata.analysis_score >= 85 ? "Bu analiz yüksek düzeyde veri doğruluğu içermektedir. Veriler resmi poz veritabanı ile tam uyumludur." :
+                                                        result.metadata.analysis_score >= 60 ? "Analiz verileri benzer imalat türleri üzerinden türetilmiştir. Kalem fiyatlarını gözden geçirmeniz önerilir." :
+                                                            "Düşük güvenirlik düzeyi. Lütfen tüm kalemleri manuel olarak doğrulayın."}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Advanced Metrics (Consensus/Consistency/CoT) */}
+                                {result.advanced_metrics && (
+                                    <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-6 space-y-4">
+                                        <div className="flex items-center gap-2">
+                                            <Sparkles className="w-4 h-4 text-purple-500" />
+                                            <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none">Gelişmiş Analiz Metrikleri</h3>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            {/* Consensus Score */}
+                                            {result.advanced_metrics.consensus_score !== undefined && (
+                                                <div className="p-4 bg-[#09090b] rounded-xl border border-[#27272a] space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest">Konsensüs Skoru</span>
+                                                        <span className="text-xs text-[#52525b]">{result.advanced_metrics.model_count} model</span>
+                                                    </div>
+                                                    <div className={cn(
+                                                        "text-2xl font-black tracking-tight",
+                                                        result.advanced_metrics.consensus_score >= 0.7 ? "text-green-500" :
+                                                            result.advanced_metrics.consensus_score >= 0.4 ? "text-amber-500" : "text-red-500"
+                                                    )}>
+                                                        %{Math.round(result.advanced_metrics.consensus_score * 100)}
+                                                    </div>
+                                                    <p className="text-[10px] text-[#52525b]">
+                                                        {result.advanced_metrics.consensus_score >= 0.7 ? "Modeller güçlü uyum gösteriyor" :
+                                                            result.advanced_metrics.consensus_score >= 0.4 ? "Kısmi uyum mevcut" : "Modeller arası farklılıklar var"}
+                                                    </p>
+                                                </div>
+                                            )}
+
+                                            {/* Consistency Score */}
+                                            {result.advanced_metrics.consistency_score !== undefined && (
+                                                <div className="p-4 bg-[#09090b] rounded-xl border border-[#27272a] space-y-2">
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest">Tutarlılık Skoru</span>
+                                                        <span className="text-xs text-[#52525b]">{result.advanced_metrics.sample_count} örnek</span>
+                                                    </div>
+                                                    <div className={cn(
+                                                        "text-2xl font-black tracking-tight",
+                                                        result.advanced_metrics.consistency_score >= 0.7 ? "text-green-500" :
+                                                            result.advanced_metrics.consistency_score >= 0.4 ? "text-amber-500" : "text-red-500"
+                                                    )}>
+                                                        %{Math.round(result.advanced_metrics.consistency_score * 100)}
+                                                    </div>
+                                                    {result.advanced_metrics.consistency_warning ? (
+                                                        <p className="text-[10px] text-amber-500 flex items-center gap-1">
+                                                            <AlertTriangle className="w-3 h-3" />
+                                                            {result.advanced_metrics.consistency_warning}
+                                                        </p>
+                                                    ) : (
+                                                        <p className="text-[10px] text-[#52525b]">
+                                                            {result.advanced_metrics.consistency_score >= 0.7 ? "Sonuçlar yüksek tutarlılık gösteriyor" : "Sonuçları gözden geçirin"}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            )}
+
+                                            {/* CoT Mode */}
+                                            {result.advanced_metrics.cot_enabled && (
+                                                <div className="p-4 bg-[#09090b] rounded-xl border border-purple-500/20 space-y-2">
+                                                    <span className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest">Chain-of-Thought</span>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+                                                        <span className="text-sm font-semibold text-purple-400">Aktif</span>
+                                                    </div>
+                                                    <p className="text-[10px] text-[#52525b]">
+                                                        Adım adım düşünme modu ile analiz yapıldı
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Critic Review (AI Feedback Loop) */}
+                                {result.critic_review && result.critic_review.status !== 'ok' && (
+                                    <div className={cn(
+                                        "p-8 rounded-2xl border-2 shadow-2xl space-y-6",
+                                        result.critic_review.status === 'error' ? "bg-red-500/5 border-red-500/20" : "bg-amber-500/5 border-amber-500/20"
+                                    )}>
+                                        <div className="flex items-center gap-4">
+                                            <div className={cn(
+                                                "p-3 rounded-xl border mb-2",
+                                                result.critic_review.status === 'error' ? "bg-red-500/10 border-red-500/20 text-red-500" : "bg-amber-500/10 border-amber-500/20 text-amber-500"
+                                            )}>
+                                                <GraduationCap className="w-6 h-6" />
+                                            </div>
+                                            <div>
+                                                <h4 className={cn("text-lg font-bold tracking-tight mb-1", result.critic_review.status === 'error' ? "text-red-500" : "text-amber-500")}>
+                                                    {result.critic_review.status === 'error' ? "Eleştirmen AI: Kritik Sorunlar" : "Eleştirmen AI: İyileştirme Önerileri"}
+                                                </h4>
+                                                <p className="text-xs text-[#71717a] font-medium leading-none">Analiz süreci denetlendi ve iyileştirme kalemleri belirlendi.</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                            {result.critic_review.issues.map((issue, idx) => (
+                                                <div key={idx} className="p-4 bg-[#09090b]/50 rounded-xl border border-[#27272a] space-y-2 group hover:border-blue-500/30 transition-colors">
+                                                    <div className="flex items-center justify-between">
+                                                        <span className={cn(
+                                                            "text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-widest",
+                                                            issue.severity === 'critical' ? "bg-red-500/20 text-red-500 border border-red-500/30" : "bg-amber-500/20 text-amber-500 border border-amber-500/30"
+                                                        )}>
+                                                            {issue.category}
+                                                        </span>
+                                                        {issue.severity === 'critical' && <XCircle className="w-3 h-3 text-red-500" />}
+                                                    </div>
+                                                    <p className="text-sm text-[#fafafa] font-medium leading-relaxed">{issue.message}</p>
+                                                    {issue.suggestion && (
+                                                        <div className="pt-2 flex items-center gap-2 text-[11px] text-[#71717a] italic">
+                                                            <Sparkles className="w-3 h-3 text-blue-500 shrink-0" />
+                                                            <span className="flex-1">💡 {issue.suggestion}</span>
+                                                            {["Eksik Kalem", "Eksik Malzeme", "Öğrenilmiş Kural"].includes(issue.category) && (
+                                                                <button
+                                                                    onClick={() => handleLearnRule(issue)}
+                                                                    className="not-italic bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 rounded-lg px-2.5 py-1 text-[10px] whitespace-nowrap transition-colors shrink-0"
+                                                                    title="Bu düzeltmeyi kural olarak kaydet"
+                                                                >
+                                                                    + Kural Yap
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Explanation */}
+                                <div className="bg-blue-900/10 border border-blue-500/20 rounded-xl p-6">
+                                    <div className="flex items-start">
+                                        <Info className="w-5 h-5 text-blue-500 mr-3 mt-0.5 flex-shrink-0" />
+                                        <div className="text-blue-400 text-sm leading-relaxed whitespace-pre-wrap">
+                                            {result.explanation}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Technical Description (Tarif) */}
+                                {result.technical_description && (
+                                    <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-6">
+                                        <div className="flex items-start">
+                                            <FileText className="w-5 h-5 text-[#a1a1aa] mr-3 mt-0.5 flex-shrink-0" />
+                                            <div className="space-y-2">
+                                                <h4 className="text-sm font-bold text-white uppercase tracking-tight">Teknik Tarif / Yapım Şartları</h4>
+                                                <div className="text-[#a1a1aa] text-sm leading-relaxed italic whitespace-pre-wrap">
+                                                    {result.technical_description}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Detail Table */}
+                                <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] overflow-hidden">
+                                    <div className="p-6 border-b border-[#27272a] flex items-center justify-between bg-black/20">
+                                        <div className="flex items-center gap-3">
+                                            <Table className="w-5 h-5 text-blue-500" />
+                                            <h3 className="text-sm font-bold text-[#fafafa] uppercase tracking-widest leading-none">Analiz Detay Cetveli</h3>
+                                        </div>
+                                        <button
+                                            onClick={addNewComponent}
+                                            className="px-4 py-2 bg-[#27272a] text-[#fafafa] rounded-xl border border-[#3f3f46] hover:bg-[#3f3f46] transition-all text-xs font-bold flex items-center gap-2 group active:scale-95"
+                                        >
+                                            <Plus className="w-3 h-3 text-blue-500 group-hover:scale-125 transition-transform" />
+                                            KALEM EKLE
+                                        </button>
+                                    </div>
+                                    <div className="p-1">
+                                        <AnalysisTable
+                                            data={(result.analysis_data && result.analysis_data.components && result.analysis_data.components.length > 0)
+                                                ? result.analysis_data
+                                                : {
+                                                    poz_no: "Y.ANALİZ",
+                                                    name: analysisName || description,
+                                                    unit: displayUnit,
+                                                    components: result.components.map(c => ({
+                                                        type: c.type,
+                                                        code: c.code,
+                                                        name: c.name,
+                                                        unit: c.unit,
+                                                        quantity: c.quantity.toString(),
+                                                        price: c.unit_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                        total: c.total_price.toLocaleString('tr-TR', { minimumFractionDigits: 2 })
+                                                    })),
+                                                    totals: {
+                                                        subtotal: subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                        profit: overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                        grand_total: grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 }),
+                                                        label: `1 ${displayUnit} Fiyatı`
+                                                    }
+                                                }}
+                                            description={result.technical_description || result.explanation}
+                                        />
+                                    </div>
+                                </div>
                             </div>
-                        </div>
 
-                        {/* Right Column: Actions & Summary */}
-                        <div className="space-y-8">
-                            {/* Quick Actions Card */}
-                            <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-8 space-y-6 sticky top-24">
-                                <div className="flex items-center gap-2">
-                                    <Calculator className="w-4 h-4 text-blue-500" />
-                                    <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none">İşlem Merkezi</h3>
-                                </div>
-
-                                <div className="space-y-4">
-                                    <button
-                                        onClick={handleSaveAnalysis}
-                                        disabled={saveLoading}
-                                        className="w-full flex items-center justify-between px-6 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl transition-all font-bold shadow-xl shadow-blue-900/20 group active:scale-[0.98]"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            {saveLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
-                                            Analizi Kaydet
-                                        </div>
-                                        <ArrowRight className="w-4 h-4 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
-                                    </button>
-
-                                    <button
-                                        onClick={handleSaveAsProject}
-                                        disabled={saveLoading}
-                                        className="w-full flex items-center justify-between px-6 py-4 bg-[#27272a] hover:bg-[#3f3f46] text-[#fafafa] rounded-2xl transition-all font-bold border border-[#3f3f46] group active:scale-[0.98]"
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <Box className="w-5 h-5 text-blue-500" />
-                                            Proje Olarak Aktar
-                                        </div>
-                                        <ArrowRight className="w-4 h-4 opacity-30 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
-                                    </button>
-
-                                    <div className="grid grid-cols-3 gap-3">
-                                        <button
-                                            onClick={handleExportExcel}
-                                            className="flex flex-col items-center justify-center p-4 bg-[#18181b] hover:bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-2xl border border-[#27272a] transition-all gap-2 group active:scale-[0.98]"
-                                        >
-                                            <FileDown className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                                            <span className="text-[10px] font-bold uppercase tracking-widest">Excel</span>
-                                        </button>
-                                        <button
-                                            onClick={handleCopyAsMarkdown}
-                                            className="flex flex-col items-center justify-center p-4 bg-[#18181b] hover:bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-2xl border border-[#27272a] transition-all gap-2 group active:scale-[0.98]"
-                                        >
-                                            <Copy className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                                            <span className="text-[10px] font-bold uppercase tracking-widest">Kopyala</span>
-                                        </button>
-                                        <button
-                                            onClick={() => { setFeedbackModalTab('ai'); setShowFeedbackModal(true); }}
-                                            className="flex flex-col items-center justify-center p-4 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 hover:text-purple-300 rounded-2xl border border-purple-500/20 transition-all gap-2 group active:scale-[0.98]"
-                                        >
-                                            <Sparkles className="w-5 h-5 group-hover:scale-110 transition-transform" />
-                                            <span className="text-[10px] font-bold uppercase tracking-widest">Öneriler</span>
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div className="pt-6 border-t border-[#27272a] space-y-4">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <Calculator className="w-4 h-4 text-[#52525b]" />
-                                        <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none italic">Fiyat Özeti</h3>
+                            {/* Right Column: Actions & Summary */}
+                            <div className="space-y-8">
+                                {/* Quick Actions Card */}
+                                <div className="bg-[#18181b] rounded-2xl shadow-xl border border-[#27272a] p-8 space-y-6 sticky top-24">
+                                    <div className="flex items-center gap-2">
+                                        <Calculator className="w-4 h-4 text-blue-500" />
+                                        <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none">İşlem Merkezi</h3>
                                     </div>
 
-                                    <div className="space-y-3">
-                                        <div className="flex justify-between items-center text-xs">
-                                            <span className="text-[#71717a]">Gider Toplamı</span>
-                                            <span className="text-[#fafafa] font-mono leading-none tracking-tighter">
-                                                {subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-[9px] opacity-50 italic">TL</span>
-                                            </span>
+                                    <div className="space-y-4">
+                                        <button
+                                            onClick={handleSaveAnalysis}
+                                            disabled={saveLoading}
+                                            className="w-full flex items-center justify-between px-6 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl transition-all font-bold shadow-xl shadow-blue-900/20 group active:scale-[0.98]"
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                {saveLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+                                                Analizi Kaydet
+                                            </div>
+                                            <ArrowRight className="w-4 h-4 opacity-50 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
+                                        </button>
+
+                                        <button
+                                            onClick={handleSaveAsProject}
+                                            disabled={saveLoading}
+                                            className="w-full flex items-center justify-between px-6 py-4 bg-[#27272a] hover:bg-[#3f3f46] text-[#fafafa] rounded-2xl transition-all font-bold border border-[#3f3f46] group active:scale-[0.98]"
+                                        >
+                                            <div className="flex items-center gap-3">
+                                                <Box className="w-5 h-5 text-blue-500" />
+                                                Proje Olarak Aktar
+                                            </div>
+                                            <ArrowRight className="w-4 h-4 opacity-30 group-hover:opacity-100 group-hover:translate-x-1 transition-all" />
+                                        </button>
+
+                                        <div className="grid grid-cols-3 gap-3">
+                                            <button
+                                                onClick={handleExportExcel}
+                                                className="flex flex-col items-center justify-center p-4 bg-[#18181b] hover:bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-2xl border border-[#27272a] transition-all gap-2 group active:scale-[0.98]"
+                                            >
+                                                <FileDown className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                                                <span className="text-[10px] font-bold uppercase tracking-widest">Excel</span>
+                                            </button>
+                                            <button
+                                                onClick={handleCopyAsMarkdown}
+                                                className="flex flex-col items-center justify-center p-4 bg-[#18181b] hover:bg-[#27272a] text-[#71717a] hover:text-[#fafafa] rounded-2xl border border-[#27272a] transition-all gap-2 group active:scale-[0.98]"
+                                            >
+                                                <Copy className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                                                <span className="text-[10px] font-bold uppercase tracking-widest">Kopyala</span>
+                                            </button>
+                                            <button
+                                                onClick={() => { setFeedbackModalTab('ai'); setShowFeedbackModal(true); }}
+                                                className="flex flex-col items-center justify-center p-4 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 hover:text-purple-300 rounded-2xl border border-purple-500/20 transition-all gap-2 group active:scale-[0.98]"
+                                            >
+                                                <Sparkles className="w-5 h-5 group-hover:scale-110 transition-transform" />
+                                                <span className="text-[10px] font-bold uppercase tracking-widest">Öneriler</span>
+                                            </button>
                                         </div>
-                                        <div className="flex justify-between items-center text-xs">
-                                            <span className="text-[#71717a]">Genel Gider (%25)</span>
-                                            <span className="text-[#71717a] font-mono leading-none tracking-tighter text-blue-500/70">
-                                                {overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-[9px] opacity-50 italic">TL</span>
-                                            </span>
+                                    </div>
+
+                                    <div className="pt-6 border-t border-[#27272a] space-y-4">
+                                        <div className="flex items-center gap-2 mb-2">
+                                            <Calculator className="w-4 h-4 text-[#52525b]" />
+                                            <h3 className="text-[10px] font-bold text-[#71717a] uppercase tracking-widest leading-none italic">Fiyat Özeti</h3>
                                         </div>
-                                        <div className="pt-3 border-t border-dashed border-[#27272a] flex flex-col gap-1">
-                                            <div className="text-[10px] font-bold text-blue-500 uppercase tracking-[0.2em] leading-none mb-1">Birim Fiyat ({displayUnit})</div>
-                                            <div className="text-3xl font-black text-[#fafafa] tracking-tighter leading-none">
-                                                {grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-sm font-bold text-blue-500">TL</span>
+
+                                        <div className="space-y-3">
+                                            <div className="flex justify-between items-center text-xs">
+                                                <span className="text-[#71717a]">Gider Toplamı</span>
+                                                <span className="text-[#fafafa] font-mono leading-none tracking-tighter">
+                                                    {subtotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-[9px] opacity-50 italic">TL</span>
+                                                </span>
+                                            </div>
+                                            <div className="flex justify-between items-center text-xs">
+                                                <span className="text-[#71717a]">Genel Gider (%25)</span>
+                                                <span className="text-[#71717a] font-mono leading-none tracking-tighter text-blue-500/70">
+                                                    {overhead.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-[9px] opacity-50 italic">TL</span>
+                                                </span>
+                                            </div>
+                                            <div className="pt-3 border-t border-dashed border-[#27272a] flex flex-col gap-1">
+                                                <div className="text-[10px] font-bold text-blue-500 uppercase tracking-[0.2em] leading-none mb-1">Birim Fiyat ({displayUnit})</div>
+                                                <div className="text-3xl font-black text-[#fafafa] tracking-tighter leading-none">
+                                                    {grandTotal.toLocaleString('tr-TR', { minimumFractionDigits: 2 })} <span className="text-sm font-bold text-blue-500">TL</span>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -1029,8 +1032,8 @@ export default function AnalysisPage() {
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Öneriler Modal - Sekmeli (AI Analiz / Manuel Düzeltme) */}
             {
@@ -1352,6 +1355,6 @@ export default function AnalysisPage() {
                     </div>
                 )
             }
-        </div>
+        </div >
     );
 }

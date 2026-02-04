@@ -35,8 +35,12 @@ async def get_llm_usage():
     OpenRouter /api/v1/credits ve /api/v1/key endpoint'lerini kullanır.
     Kalan kredi = total_credits - total_usage
     """
-    # Get warning threshold from settings
-    warning_threshold_str = db.get_setting("llm_warning_threshold")
+    # Get warning threshold from settings service
+    from services.settings_service import get_settings_service
+    settings_service = get_settings_service()
+    settings = settings_service.get_settings()
+    
+    warning_threshold_str = settings.get("llm_warning_threshold")
     try:
         warning_threshold = float(warning_threshold_str) if warning_threshold_str else 5.00
     except (ValueError, TypeError):

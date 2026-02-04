@@ -42,6 +42,9 @@ interface SettingsData {
     density_cement?: string;
     density_iron?: string;
 
+    // API Limits
+    llm_warning_threshold?: string;
+
     // Signatories
     preparer_name?: string;
     preparer_title?: string;
@@ -351,6 +354,26 @@ export default function SettingsPage() {
                                     <Input label="Demir" value={settings.density_iron || '7.85'} onChange={v => handleSettingChange('density_iron', v)} type="number" step="0.01" />
                                     <Input label="Çimento" value={settings.density_cement || '1.50'} onChange={v => handleSettingChange('density_cement', v)} type="number" step="0.01" />
                                     <Input label="Beton" value={settings.density_concrete || '2.40'} onChange={v => handleSettingChange('density_concrete', v)} type="number" step="0.01" />
+                                </div>
+                            </div>
+                            <div className="space-y-4 pt-4 border-t border-[#27272a]">
+                                <h3 className="text-sm font-bold text-[#fafafa] uppercase tracking-wider flex items-center gap-2 border-b border-[#27272a] pb-2">
+                                    <AlertTriangle className="w-4 h-4 text-amber-500" />
+                                    API Limit & Uyarılar
+                                </h3>
+                                <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
+                                    <p className="text-sm text-[#a1a1aa] mb-4">
+                                        OpenRouter API krediniz bu tutarın altına düştüğünde sistem uyarı ve kırmızı gösterge ile sizi bilgilendirecektir.
+                                    </p>
+                                    <div className="max-w-xs">
+                                        <Input
+                                            label="Düşük Bakiye Uyarısı ($)"
+                                            value={settings.llm_warning_threshold || '5.00'}
+                                            onChange={v => handleSettingChange('llm_warning_threshold', v)}
+                                            type="number"
+                                            step="0.01"
+                                        />
+                                    </div>
                                 </div>
                             </div>
                         </div>

@@ -171,9 +171,14 @@ export default function Home() {
           </div>
           <div className="space-y-3">
             <div>
-              <h3 className="text-3xl font-bold text-[#fafafa] tracking-tight">{usageLoading ? <div className="h-8 w-24 bg-[#27272a] animate-pulse rounded"></div> : `$${(usageData.remaining ?? 0).toFixed(2)}`}</h3>
+              <h3 className={`text-3xl font-bold tracking-tight ${usageData.is_low_balance ? 'text-red-500' : 'text-[#fafafa]'}`}>{usageLoading ? <div className="h-8 w-24 bg-[#27272a] animate-pulse rounded"></div> : `$${(usageData.remaining ?? 0).toFixed(2)}`}</h3>
               <p className="text-sm text-[#a1a1aa] font-medium">Kalan Bakiye</p>
             </div>
+            {usageData.is_low_balance && (
+              <div className="mt-2 text-[10px] text-red-500 font-bold bg-red-500/10 px-2 py-1 rounded inline-block animate-pulse">
+                BAKİYE AZALDI
+              </div>
+            )}
             <div className="flex items-center justify-between text-xs pt-2 border-t border-[#27272a]">
               <div className="text-[#71717a]">
                 <span className="block text-[10px] uppercase font-bold">Harcanan</span>

@@ -1,8 +1,8 @@
 {
   "selected_models": {
     "analyze": "anthropic/claude-sonnet-4",
-    "refine": "moonshotai/kimi-k2.5",
-    "critic": "moonshotai/kimi-k2.5"
+    "refine": "openai/gpt-5.2",
+    "critic": "openai/gpt-5.2"
   },
   "cached_models": [
     {
@@ -3729,5 +3729,6 @@
     }
   ],
   "last_models_refresh": 1770101367.5938506,
-  "filter_free_only": false
+  "filter_free_only": false,
+  "llm_warning_threshold": 8.0
 }

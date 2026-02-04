@@ -26,7 +26,6 @@ export default function RootLayout({
         <NotificationProvider>
           <LLMUsageProvider>
             <CartProvider>
-              <LLMUsageWarning />
               <DashboardLayout>{children}</DashboardLayout>
               <Notification />
             </CartProvider>

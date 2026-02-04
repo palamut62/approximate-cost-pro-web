@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
 from services.settings_service import get_settings_service
@@ -10,8 +10,12 @@ router = APIRouter(
 )
 
 class SettingsUpdate(BaseModel):
-    selected_models: Dict[str, str] = {}
-    filter_free_only: bool = False
+    selected_models: Optional[Dict[str, str]] = None
+    filter_free_only: Optional[bool] = None
+    llm_warning_threshold: Optional[float] = None
+    
+    class Config:
+        extra = "allow"
 
 @router.get("")
 async def get_settings():
@@ -24,13 +28,10 @@ async def update_settings(settings: SettingsUpdate):
     """Update settings"""
     service = get_settings_service()
     
-    # Convert Pydantic model to dict, filtering out unset values if minimal update is desired,
-    # or just passing full dict. Here we merge with existing.
-    update_data = {}
-    if settings.selected_models:
-        update_data["selected_models"] = settings.selected_models
+    service = get_settings_service()
     
-    update_data["filter_free_only"] = settings.filter_free_only
+    # Convert Pydantic model to dict, exclude unset
+    update_data = settings.dict(exclude_unset=True)
     
     return service.update_settings(update_data)
 
